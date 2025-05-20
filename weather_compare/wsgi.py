@@ -14,6 +14,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'weather_compare.settings')
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "weather_compare.settings")
 
 application = get_wsgi_application()

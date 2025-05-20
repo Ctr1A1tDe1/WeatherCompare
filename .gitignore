@@ -1,3 +1,8 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
 # Virtual environment
 venv/
 __pycache__/
@@ -7,10 +12,12 @@ __pycache__/
 .vscode/
 .idea/
 
-# Django specific
-db.sqlite3
+# Django
 *.log
-local_settings.py # If you plan to have local settings not for commit
+db.sqlite3
+db.sqlite3-journal # SQLite journal file
+staticfiles/ # If this is your STATIC_ROOT
+media/ # If you use media files and don't want to commit user uploads
 
 # OS specific
 .DS_Store

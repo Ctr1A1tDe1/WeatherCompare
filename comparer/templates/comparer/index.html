@@ -1,22 +1,90 @@
+{% load static %} {# Load the staticfiles template tags #}
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Weather Comparison</title>
-    <!-- We will add CSS styles later -->
+    <title>Weather Compare</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="{% static 'comparer/css/styles.css' %}">
 </head>
 <body>
-    <h1>Weather Comparison App</h1>
-    <p>Enter up to 5 cities to compare their current weather.</p>
+    <div class="container">
+        <h1>Weather Compare</h1>
 
-    <!-- Placeholder for city input and weather display -->
-    <div id="weather-display-area">
-        <p><em>Weather data will appear here...</em></p>
+        <div class="form-section">
+            <form method="POST" action="{% url 'comparer:index' %}">
+                {% csrf_token %}
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label for="city_name_1">City 1:</label>
+                        <input type="text" name="city_name_1" id="city_name_1" value="{{ submitted_city1|default:'' }}" placeholder="e.g., London" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="city_name_2">City 2:</label>
+                        <input type="text" name="city_name_2" id="city_name_2" value="{{ submitted_city2|default:'' }}" placeholder="e.g., New York" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="year">Select Year:</label>
+                        <input type="number" name="year" id="year" min="1940" max="{{ current_year }}" value="{{ selected_year|default:default_selection_year }}" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="submit-button" class="sr-only">Submit</label>
+                        <button type="submit" id="submit-button">Compare Weather</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+
+        {% if error_message %}
+            <p class="error-message">{{ error_message }}</p>
+        {% endif %}
+
+        {% if form_submitted and not error_message %}
+            <h2>Comparison for {{ selected_year }}</h2>
+            {% if city_details_for_display %}
+                <div class="city-details-section">
+                {% for detail in city_details_for_display %}
+                    <div class="city-info-display">
+                        <h4>{{ detail.name }}</h4>
+                        {% if detail.address %}<p><small><em>Found: {{ detail.address }}</em></small></p>{% endif %}
+                        {% if detail.error %}
+                            <p class="error-message">Error: {{ detail.error }}</p>
+                        {% else %}
+                            <p><small>Temp Unit: {{ detail.temp_unit }}, Precip Unit: {{ detail.precip_unit }}</small></p>
+                        {% endif %}
+                    </div>
+                {% endfor %}
+                </div>
+            {% endif %}
+            
+            {% if city_data_for_chart %}
+                <div class="charts-container">
+                    <div class="chart-wrapper">
+                        <h3>Average Monthly Temperature Comparison</h3>
+                        <canvas id="temperatureChart"></canvas>
+                    </div>
+                    <div class="chart-wrapper">
+                        <h3>Total Monthly Precipitation Comparison</h3>
+                        <canvas id="precipitationChart"></canvas>
+                    </div>
+                </div>
+                 {# Pass data to JavaScript using json_script #}
+                {{ month_labels_for_chart|json_script:"monthLabelsData" }}
+                {{ city_data_for_chart|json_script:"cityChartData" }}
+            {% elif not error_message %}
+                <p style="text-align:center; color:#555;">Could not generate charts. Please check individual city messages above for details.</p>
+            {% endif %}
+        {% endif %}
+        
+        <footer>
+            <p>Geocoding by Nominatim (OpenStreetMap). Historical weather data by Open-Meteo.</p>
+        </footer>
     </div>
 
-    <footer>
-        <p>Weather data powered by a cool API (to be decided!)</p>
-    </footer>
+    {# JavaScript File #}
+    {% if form_submitted and city_data_for_chart %}
+        <script src="{% static 'comparer/js/main_charts.js' %}"></script>
+    {% endif %}
 </body>
 </html>

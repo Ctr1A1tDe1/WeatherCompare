@@ -1,7 +1,7 @@
 from django.urls import path
-from . import views  # Import views from the current app
+from . import views
 
-app_name = 'comparer'  # Namespacing URLs
+app_name = 'comparer'
 
 urlpatterns = [
     path('', views.index_view, name='index'),

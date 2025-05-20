@@ -1,0 +1,6 @@
+SECRET_KEY = [YOUR_SECRET_KEY_GOES_HERE]
+
+# User agent for Nominatim geocoding service
+# Replace with your application name and your contact email
+NOMINATIM_USER_AGENT_APP_NAME="MyWeatherApp"
+NOMINATIM_USER_AGENT_EMAIL="user@example.com"

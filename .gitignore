@@ -15,9 +15,9 @@ __pycache__/
 # Django
 *.log
 db.sqlite3
-db.sqlite3-journal # SQLite journal file
-staticfiles/ # If this is your STATIC_ROOT
-media/ # If you use media files and don't want to commit user uploads
+db.sqlite3-journal
+staticfiles/ # If
+media/
 
 # OS specific
 .DS_Store

@@ -1,10 +1,14 @@
 # comparer/weather_utils.py
 import requests
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut, GeocoderUnavailable
 import os
+import time
+from functools import wraps
+from typing import Dict, List, Optional, Union, Any, Tuple
+from django.core.cache import cache
 
 # --- Constants for API interaction ---
 OPEN_METEO_ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
@@ -12,40 +16,149 @@ API_TIMEOUT_SECONDS = 20  # Increased timeout for potentially larger annual data
 DAILY_METRICS = "temperature_2m_mean,precipitation_sum"
 TIMEZONE = "GMT"  # Or use "auto" to guess from lat/lon
 
+# --- Cache durations in seconds ---
+GEOCODING_CACHE_DURATION = 7 * 86400  # 7 days
+WEATHER_CACHE_DURATION = 86400  # 24 hours
+
+# --- API Rate Limits ---
+NOMINATIM_CALLS_LIMIT = 1  # Calls per second
+NOMINATIM_TIME_PERIOD = 1  # Second
+OPEN_METEO_CALLS_LIMIT = 10  # Calls per minute
+OPEN_METEO_TIME_PERIOD = 60  # Seconds
+
+# --- Default values ---
+DEFAULT_TEMP_UNIT = "°C"
+DEFAULT_PRECIP_UNIT = "mm"
+DEFAULT_APP_NAME = "DefaultWeatherApp"
+DEFAULT_CONTACT_EMAIL = "anonymous_user@example.com"
+
+# --- Type aliases ---
+CoordinatesDict = Dict[str, Union[float, str]]
+MonthlyDataItem = Dict[str, Optional[Union[int, float]]]
+MonthlyDataList = List[MonthlyDataItem]
+WeatherDataDict = Dict[str, Union[MonthlyDataList, str]]
+APIResponseDict = Dict[str, Any]
+
+
+# --- Rate limiting ---
+class RateLimiter:
+    """Simple rate limiter to prevent API abuse"""
+
+    def __init__(self, calls_limit: int, time_period: int):
+        self.calls_limit = calls_limit  # Max calls allowed
+        self.time_period = time_period  # Time period in seconds
+        self.calls_timestamps: List[datetime] = []
+
+    def wait_if_needed(self) -> None:
+        """Wait if rate limit is reached"""
+        now = datetime.now()
+
+        # Remove timestamps older than the time period
+        self.calls_timestamps = [
+            ts
+            for ts in self.calls_timestamps
+            if now - ts < timedelta(seconds=self.time_period)
+        ]
+
+        # If we've reached the limit, wait
+        if len(self.calls_timestamps) >= self.calls_limit:
+            oldest_timestamp = min(self.calls_timestamps)
+            wait_time = (
+                oldest_timestamp + timedelta(seconds=self.time_period) - now
+            ).total_seconds()
+            if wait_time > 0:
+                time.sleep(wait_time)
+
+        # Add current timestamp
+        self.calls_timestamps.append(datetime.now())
+
+
+# Create rate limiters for each API
+NOMINATIM_RATE_LIMITER = RateLimiter(
+    calls_limit=NOMINATIM_CALLS_LIMIT, time_period=NOMINATIM_TIME_PERIOD
+)
+OPEN_METEO_RATE_LIMITER = RateLimiter(
+    calls_limit=OPEN_METEO_CALLS_LIMIT, time_period=OPEN_METEO_TIME_PERIOD
+)
+
+
+# --- Memoization decorator ---
+def memoize(func):
+    """Simple memoization decorator for function results"""
+    cache_dict = {}
+
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        # Create a key from the function arguments
+        key = str(args) + str(sorted(kwargs.items()))
+
+        # Return cached result if available
+        if key in cache_dict:
+            return cache_dict[key]
+
+        # Calculate and cache result
+        result = func(*args, **kwargs)
+        cache_dict[key] = result
+        return result
+
+    return wrapper
+
+
+def _create_user_agent() -> str:
+    """
+    Creates a user agent string for Nominatim based on environment variables.
+
+    Returns:
+        str: The formatted user agent string.
+    """
+    app_name = os.environ.get("NOMINATIM_USER_AGENT_APP_NAME", DEFAULT_APP_NAME)
+    contact_email = os.environ.get("NOMINATIM_USER_AGENT_EMAIL", DEFAULT_CONTACT_EMAIL)
+    return f"{app_name}/1.0 ({contact_email})"
+
 
 # --- Geocoding Function ---
-def get_coordinates_for_city(city_name):
+def get_coordinates_for_city(city_name: str) -> Optional[CoordinatesDict]:
     """
     Geocodes a city name to its latitude and longitude using Nominatim.
 
     Args:
-        city_name (str): The name of the city.
+        city_name: The name of the city.
 
     Returns:
-        dict: A dictionary with 'latitude', 'longitude', and 'address',
-              or None if not found or an error occurs.
+        A dictionary with 'latitude', 'longitude', and 'address',
+        or None if not found or an error occurs.
     """
     if not city_name:
         print("Warning: Empty city name provided for geocoding.")
         return None
 
-    # Construct user_agent from environment variables with fallbacks
-    app_name = os.environ.get("NOMINATIM_USER_AGENT_APP_NAME", "DefaultWeatherApp")
-    contact_email = os.environ.get(
-        "NOMINATIM_USER_AGENT_EMAIL", "anonymous_user@example.com"
-    )
-    user_agent_string = f"{app_name}/1.0 ({contact_email})"
+    # Create a cache key
+    cache_key = f"geocode_{city_name.lower().strip()}"
+
+    # Try to get from cache
+    cached_coords = cache.get(cache_key)
+    if cached_coords:
+        return cached_coords
+
+    # Get user agent string
+    user_agent_string = _create_user_agent()
 
     try:
+        # Apply rate limiting
+        NOMINATIM_RATE_LIMITER.wait_if_needed()
+
         geolocator = Nominatim(user_agent=user_agent_string)
 
         location = geolocator.geocode(city_name, timeout=10)
         if location:
-            return {
+            result = {
                 "latitude": location.latitude,
                 "longitude": location.longitude,
                 "address": location.address,
             }
+            # Cache for a longer period as coordinates rarely change
+            cache.set(cache_key, result, GEOCODING_CACHE_DURATION)
+            return result
         else:
             print(
                 f"Info: Could not geocode city: '{city_name}'. No location found by Nominatim."
@@ -67,11 +180,31 @@ def get_coordinates_for_city(city_name):
 # --- Weather Data Fetching and Processing Helpers ---
 
 
-def _fetch_raw_annual_data_from_api(latitude, longitude, year):
+def _fetch_raw_annual_data_from_api(
+    latitude: float, longitude: float, year: int
+) -> Optional[APIResponseDict]:
     """
     Helper to fetch raw daily weather data for a full year from Open-Meteo.
-    Returns the JSON response data or None on failure.
+
+    Args:
+        latitude: Latitude of the location.
+        longitude: Longitude of the location.
+        year: The year for which to fetch data.
+
+    Returns:
+        The JSON response data or None on failure.
     """
+    # Apply rate limiting
+    OPEN_METEO_RATE_LIMITER.wait_if_needed()
+
+    # Create a cache key for this request
+    cache_key = f"weather_raw_{latitude}_{longitude}_{year}"
+
+    # Try to get from cache
+    cached_data = cache.get(cache_key)
+    if cached_data:
+        return cached_data
+
     start_date_str = f"{year}-01-01"
     end_date_str = f"{year}-12-31"
 
@@ -83,9 +216,6 @@ def _fetch_raw_annual_data_from_api(latitude, longitude, year):
         "daily": DAILY_METRICS,
         "timezone": TIMEZONE,
     }
-
-    # For debugging, you can uncomment the next line:
-    # print(f"Requesting Open-Meteo URL: {requests.Request('GET', OPEN_METEO_ARCHIVE_URL, params=params).prepare().url}")
 
     try:
         response = requests.get(
@@ -102,6 +232,9 @@ def _fetch_raw_annual_data_from_api(latitude, longitude, year):
                 f"Warning: API response for {year} at ({latitude},{longitude}) lacks 'daily' data or 'time' array is not a list."
             )
             return None
+
+        # Cache the raw API data
+        cache.set(cache_key, api_data, WEATHER_CACHE_DURATION)
         return api_data
 
     except requests.exceptions.RequestException as e:
@@ -114,38 +247,46 @@ def _fetch_raw_annual_data_from_api(latitude, longitude, year):
         return None
 
 
-def _create_and_prepare_daily_dataframe(api_data_json):
+def _create_and_prepare_daily_dataframe(
+    api_data_json: Optional[APIResponseDict],
+) -> Optional[pd.DataFrame]:
     """
     Converts raw API JSON data into a prepared Pandas DataFrame for daily weather.
-    Returns the DataFrame or None if input is invalid or processing fails.
+
+    Args:
+        api_data_json: The raw API response JSON.
+
+    Returns:
+        A prepared DataFrame or None if input is invalid or processing fails.
     """
     if not api_data_json or "daily" not in api_data_json:
         print("Warning: Invalid or empty API data provided for DataFrame creation.")
         return None
 
     try:
-        df = pd.DataFrame(api_data_json["daily"])
-
+        # Create DataFrame only with required columns to reduce memory usage
         required_cols = ["time", "temperature_2m_mean", "precipitation_sum"]
-        if not all(col in df.columns for col in required_cols):
+        df_data = {col: api_data_json["daily"].get(col, []) for col in required_cols}
+
+        # Check if all required columns exist
+        if not all(col in df_data for col in required_cols):
             print(
                 f"Warning: DataFrame from API is missing one or more required columns: {required_cols}"
             )
-            # Log which columns are actually present for debugging
-            # print(f"Available columns: {df.columns.tolist()}")
             return None
 
-        df["time"] = pd.to_datetime(df["time"])
-        df["temperature_2m_mean"] = pd.to_numeric(
-            df["temperature_2m_mean"], errors="coerce"
-        )
-        df["precipitation_sum"] = pd.to_numeric(
-            df["precipitation_sum"], errors="coerce"
-        )
+        # Create DataFrame with optimized approach
+        df = pd.DataFrame(df_data)
 
-        # Drop rows where essential data (temp or precip) became NaN after coercion.
-        # This is important for accurate monthly aggregation.
-        df.dropna(subset=["temperature_2m_mean", "precipitation_sum"], inplace=True)
+        # Convert time column to datetime more efficiently
+        df["time"] = pd.to_datetime(df["time"], format="%Y-%m-%d", errors="coerce")
+
+        # Convert numeric columns with optimized approach
+        for col in ["temperature_2m_mean", "precipitation_sum"]:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+        # Drop rows where essential data became NaN after coercion
+        df = df.dropna(subset=["temperature_2m_mean", "precipitation_sum"])
 
         if df.empty:
             print(
@@ -153,7 +294,8 @@ def _create_and_prepare_daily_dataframe(api_data_json):
             )
             return None  # Explicitly return None if no data remains
 
-        df.set_index("time", inplace=True)
+        # Set index more efficiently
+        df = df.set_index("time")
         return df
 
     except KeyError as e:
@@ -164,80 +306,85 @@ def _create_and_prepare_daily_dataframe(api_data_json):
         return None
 
 
-def _aggregate_daily_data_to_monthly(daily_df, year):
+@memoize
+def _aggregate_daily_data_to_monthly(
+    daily_df: Optional[pd.DataFrame], year: int
+) -> MonthlyDataList:
     """
     Aggregates a DataFrame of daily weather data to monthly averages/sums.
-    Returns a list of dictionaries, one for each month. Returns empty list on error or if no data.
+
+    Args:
+        daily_df: DataFrame containing daily weather data.
+        year: The year for which data is being aggregated.
+
+    Returns:
+        A list of dictionaries, one for each month. Returns empty list on error or if no data.
     """
     if daily_df is None or daily_df.empty:
-        # print("Info: No daily data provided for monthly aggregation.") # Can be verbose
         return []
 
     try:
-        # Resample to get monthly mean temperature and sum of precipitation
-        # 'ME' stands for Month End frequency.
-        monthly_avg_temp = daily_df["temperature_2m_mean"].resample("ME").mean()
-        monthly_total_precip = daily_df["precipitation_sum"].resample("ME").sum()
+        # Use more efficient resampling with vectorized operations
+        monthly_stats = daily_df.resample("M").agg(
+            {"temperature_2m_mean": "mean", "precipitation_sum": "sum"}
+        )
 
-        monthly_results = []
-        for month_num in range(1, 13):
-            # Construct month-end date for reliable lookup in resampled Series
-            # This is the index pandas uses for 'ME' resampling.
-            try:
-                # For month_num=12, year_for_next_month = year + 1, next_month_start_num = 1
-                # else, year_for_next_month = year, next_month_start_num = month_num + 1
-                if month_num == 12:
-                    # Last day of December
-                    month_end_lookup_date = pd.Timestamp(datetime(year, 12, 31))
-                else:
-                    # Last day of the current month_num
-                    month_end_lookup_date = pd.Timestamp(
-                        datetime(year, month_num + 1, 1) - pd.Timedelta(days=1)
-                    )
+        # Pre-create the result list with None values
+        monthly_results = [
+            {"month": m, "avg_temp": None, "total_precip": None} for m in range(1, 13)
+        ]
 
-                avg_temp_val = monthly_avg_temp.get(month_end_lookup_date)
-                total_precip_val = monthly_total_precip.get(month_end_lookup_date)
-
-            except KeyError:  # Should ideally not happen if resample covers all months
-                avg_temp_val = None
-                total_precip_val = None
-
-            monthly_results.append(
+        # Update only the months we have data for
+        for date, row in monthly_stats.iterrows():
+            month = date.month
+            monthly_results[month - 1].update(
                 {
-                    "month": month_num,
                     "avg_temp": (
-                        round(avg_temp_val, 2) if pd.notnull(avg_temp_val) else None
+                        round(row["temperature_2m_mean"], 2)
+                        if pd.notnull(row["temperature_2m_mean"])
+                        else None
                     ),
                     "total_precip": (
-                        round(total_precip_val, 2)
-                        if pd.notnull(total_precip_val)
+                        round(row["precipitation_sum"], 2)
+                        if pd.notnull(row["precipitation_sum"])
                         else None
                     ),
                 }
             )
+
         return monthly_results
 
     except Exception as e:
         print(f"Error during monthly aggregation: {e}")
-        return []  # Return empty list on aggregation failure
+        return []
 
 
 # --- Main Public Function ---
-def get_historical_annual_data_by_month(latitude, longitude, year):
+def get_historical_annual_data_by_month(
+    latitude: float, longitude: float, year: int
+) -> Optional[WeatherDataDict]:
     """
     Fetches and processes daily historical weather data for an entire year,
     aggregating it into monthly averages for temperature and total precipitation.
 
     Args:
-        latitude (float): Latitude of the location.
-        longitude (float): Longitude of the location.
-        year (int): The year for which to fetch data.
+        latitude: Latitude of the location.
+        longitude: Longitude of the location.
+        year: The year for which to fetch data.
 
     Returns:
-        dict: Contains 'monthly_data' (list of 12 monthly stats),
-              'temp_unit', 'precip_unit'. Returns None if critical failure (e.g., API down).
-              'monthly_data' will be an empty list if aggregation fails or no usable data.
+        A dictionary containing 'monthly_data' (list of 12 monthly stats),
+        'temp_unit', 'precip_unit'. Returns None if critical failure (e.g., API down).
+        'monthly_data' will be an empty list if aggregation fails or no usable data.
     """
+    # Create a unique cache key based on parameters
+    cache_key = f"weather_data_{latitude}_{longitude}_{year}"
+
+    # Try to get data from cache first
+    cached_data = cache.get(cache_key)
+    if cached_data:
+        return cached_data
+
     raw_api_data = _fetch_raw_annual_data_from_api(latitude, longitude, year)
     if not raw_api_data:
         return (
@@ -257,14 +404,23 @@ def get_historical_annual_data_by_month(latitude, longitude, year):
         )
 
     # Extract units from the raw API data (if available, even if DataFrame prep failed)
-    temp_unit = raw_api_data.get("daily_units", {}).get("temperature_2m_mean", "°C")
-    precip_unit = raw_api_data.get("daily_units", {}).get("precipitation_sum", "mm")
+    temp_unit = raw_api_data.get("daily_units", {}).get(
+        "temperature_2m_mean", DEFAULT_TEMP_UNIT
+    )
+    precip_unit = raw_api_data.get("daily_units", {}).get(
+        "precipitation_sum", DEFAULT_PRECIP_UNIT
+    )
 
-    return {
+    result = {
         "monthly_data": monthly_aggregated_data,  # This list might be empty
         "temp_unit": temp_unit,
         "precip_unit": precip_unit,
     }
+
+    # Store in cache
+    cache.set(cache_key, result, WEATHER_CACHE_DURATION)
+
+    return result
 
 
 # --- Test Block ---
@@ -325,20 +481,10 @@ if __name__ == "__main__":
                 f"Could not retrieve any annual weather data for London for {test_year} (Critical API or initial processing failure)."
             )
 
-        # Test a year with potentially sparse data or known issues if you have one, e.g., a very old year
-        # test_year_old = 1950
-        # print(f"\nFetching annual data for London for {test_year_old}...")
-        # annual_data_london_old = get_historical_annual_data_by_month(test_lat, test_lon, test_year_old)
-        # if annual_data_london_old:
-        #     # ... similar print statements ...
-        # else:
-        #     print(f"Could not retrieve annual weather data for London for {test_year_old}.")
-
     else:
         print("\nSkipping weather data test as initial geocoding for London failed.")
 
     # Test with known problematic coordinates or year (e.g., latitude out of bounds)
-    # This would primarily test _fetch_raw_annual_data_from_api's error handling if Open-Meteo returns an error JSON
     print("\nFetching data for invalid coordinates (e.g., on Mars)...")
     invalid_coords_data = get_historical_annual_data_by_month(
         latitude=0, longitude=0, year=2022
@@ -347,7 +493,6 @@ if __name__ == "__main__":
         print(
             "Data received for (0,0), 2022 (unexpected for invalid location, check API response):"
         )
-        # ... print details ...
     elif invalid_coords_data and not invalid_coords_data["monthly_data"]:
         print(
             "API call for (0,0), 2022 was made, units might be present, but no monthly data aggregated (expected for invalid location)."

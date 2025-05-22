@@ -1,37 +1,94 @@
 {% load static %} {# Load the staticfiles template tags #}
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Weather Compare</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <link rel="stylesheet" href="{% static 'comparer/css/styles.css' %}">
 </head>
 <body>
-    <div class="container">
+    <div class="header">
+        <div class="hamburger-menu">
+            <input id="menu-toggle" type="checkbox">
+            <label for="menu-toggle" class="menu-button">
+                <span class="hamburger-icon"></span>
+            </label>
+            <div class="menu-items">
+                <a href="{% url 'comparer:index' %}">Home</a>
+                <a href="#about">About</a>
+                <a href="#help">Help</a>
+            </div>
+        </div>
+        
         <h1>Weather Compare</h1>
+        
+        <div class="theme-toggle">
+            <input type="checkbox" id="theme-switch">
+            <label for="theme-switch" class="toggle-label">
+                <i class="fas fa-sun"></i>
+                <i class="fas fa-moon"></i>
+            </label>
+        </div>
+    </div>
+    
+    <div class="container">
 
         <div class="form-section">
             <form method="POST" action="{% url 'comparer:index' %}">
                 {% csrf_token %}
                 <div class="form-grid">
-                    <div class="form-group">
+                    <!-- City 1 (always visible) -->
+                    <div class="form-group autocomplete-wrapper">
                         <label for="city_name_1">City 1:</label>
                         <input type="text" name="city_name_1" id="city_name_1" value="{{ submitted_city1|default:'' }}" placeholder="e.g., London" required>
                     </div>
-                    <div class="form-group">
+                    
+                    <!-- City 2 with toggle -->
+                    <div class="form-group city-column autocomplete-wrapper">
+                        <div class="city-toggle">
+                            <input type="checkbox" id="enable-city2" name="enable_city2" {% if enable_city2 %}checked{% endif %}>
+                            <label for="enable-city2">Include City 2</label>
+                        </div>
                         <label for="city_name_2">City 2:</label>
                         <input type="text" name="city_name_2" id="city_name_2" value="{{ submitted_city2|default:'' }}" placeholder="e.g., New York" required>
                     </div>
-                    <div class="form-group">
-                        <label for="year">Select Year:</label>
-                        <input type="number" name="year" id="year" min="1940" max="{{ current_year }}" value="{{ selected_year|default:default_selection_year }}" required>
+                    
+                    <!-- City 3 with toggle -->
+                    <div class="form-group city-column autocomplete-wrapper">
+                        <div class="city-toggle">
+                            <input type="checkbox" id="enable-city3" name="enable_city3" {% if enable_city3 %}checked{% endif %}>
+                            <label for="enable-city3">Include City 3</label>
+                        </div>
+                        <label for="city_name_3">City 3:</label>
+                        <input type="text" name="city_name_3" id="city_name_3" value="{{ submitted_city3|default:'' }}" placeholder="e.g., Tokyo">
                     </div>
+                </div>
+                
+                <div class="form-grid year-grid">
+                    <!-- Year for City 1 -->
                     <div class="form-group">
-                        <label for="submit-button" class="sr-only">Submit</label>
-                        <button type="submit" id="submit-button">Compare Weather</button>
+                        <label for="year_1">Year for City 1:</label>
+                        <input type="number" name="year_1" id="year_1" min="1940" max="{{ current_year|add:'-1' }}" value="{{ year_1|default:default_selection_year }}" required>
                     </div>
+                    
+                    <!-- Year for City 2 -->
+                    <div class="form-group city2-input">
+                        <label for="year_2">Year for City 2:</label>
+                        <input type="number" name="year_2" id="year_2" min="1940" max="{{ current_year|add:'-1' }}" value="{{ year_2|default:default_selection_year }}" required>
+                    </div>
+                    
+                    <!-- Year for City 3 -->
+                    <div class="form-group city3-input">
+                        <label for="year_3">Year for City 3:</label>
+                        <input type="number" name="year_3" id="year_3" min="1940" max="{{ current_year|add:'-1' }}" value="{{ year_3|default:default_selection_year }}">
+                    </div>
+                </div>
+                
+                <div class="form-group submit-container">
+                    <button type="submit" id="submit-button">Compare Weather</button>
                 </div>
             </form>
         </div>
@@ -41,7 +98,7 @@
         {% endif %}
 
         {% if form_submitted and not error_message %}
-            <h2>Comparison for {{ selected_year }}</h2>
+            <h2>Weather Comparison</h2>
             {% if city_details_for_display %}
                 <div class="city-details-section">
                 {% for detail in city_details_for_display %}
@@ -82,7 +139,10 @@
         </footer>
     </div>
 
-    {# JavaScript File #}
+    {# JavaScript Files #}
+    <script src="{% static 'comparer/js/theme_controls.js' %}"></script>
+    <script src="{% static 'comparer/js/form_controls.js' %}"></script>
+    <script src="{% static 'comparer/js/autocomplete.js' %}"></script>
     {% if form_submitted and city_data_for_chart %}
         <script src="{% static 'comparer/js/main_charts.js' %}"></script>
     {% endif %}

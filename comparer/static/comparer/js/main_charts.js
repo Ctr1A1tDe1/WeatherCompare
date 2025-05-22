@@ -1,4 +1,7 @@
 /**
+ * Weather Compare - Chart Generation Module
+ * Handles the creation and rendering of weather comparison charts
+ * 
  * Safely parses JSON data from an HTML script tag.
  * @param {string} elementId - The ID of the script tag containing JSON data.
  * @param {boolean} expectArray - Whether the parsed data is expected to be an array.
@@ -21,7 +24,6 @@ function getJsonData(elementId, expectArray = false) {
             console.warn(`Data from element ID '${elementId}' was expected to be an array, but received:`, typeof parsedData, parsedData);
             return [];
         }
-        //console.log(`Successfully parsed data for ${elementId}:`, parsedData); // For debugging
         return parsedData;
     } catch (e) {
         console.error(`Error parsing JSON from element ID '${elementId}':`, e, "\nContent was:", element.textContent);
@@ -43,11 +45,28 @@ function prepareChartDatasets(cityChartData) {
 
     const datasetsTemp = [];
     const datasetsPrecip = [];
-    const lineColors = ['rgba(255, 99, 132, 1)', 'rgba(54, 162, 235, 1)', 'rgba(75, 192, 192, 1)'];
-    const backgroundColors = ['rgba(255, 99, 132, 0.2)', 'rgba(54, 162, 235, 0.2)', 'rgba(75, 192, 192, 0.2)'];
+    
+    // Enhanced color palette to support more cities
+    const lineColors = [
+        'rgba(255, 99, 132, 1)',   // Red
+        'rgba(54, 162, 235, 1)',   // Blue
+        'rgba(75, 192, 192, 1)',   // Green
+        'rgba(255, 159, 64, 1)',   // Orange
+        'rgba(153, 102, 255, 1)'   // Purple
+    ];
+    
+    const backgroundColors = [
+        'rgba(255, 99, 132, 0.2)',  // Red
+        'rgba(54, 162, 235, 0.2)',  // Blue
+        'rgba(75, 192, 192, 0.2)',  // Green
+        'rgba(255, 159, 64, 0.2)',  // Orange
+        'rgba(153, 102, 255, 0.2)'  // Purple
+    ];
 
-    cityChartData.forEach((city, index) => { // This line should now be safe
+    // Filter out any disabled cities (handled by the form_controls.js)
+    cityChartData.forEach((city, index) => {
         if (typeof city === 'object' && city?.temperatures && city?.precipitations) {
+            // Add temperature dataset
             datasetsTemp.push({
                 label: `${city.name ?? 'Unknown City'} Temp (${city.temp_unit ?? '°C'})`,
                 data: city.temperatures,
@@ -57,6 +76,8 @@ function prepareChartDatasets(cityChartData) {
                 fill: false,
                 spanGaps: true
             });
+            
+            // Add precipitation dataset
             datasetsPrecip.push({
                 label: `${city.name ?? 'Unknown City'} Precip (${city.precip_unit ?? 'mm'})`,
                 data: city.precipitations,
@@ -68,8 +89,10 @@ function prepareChartDatasets(cityChartData) {
             console.warn("Skipping city in chart dataset preparation due to missing or invalid data structure:", city);
         }
     });
+    
     return { datasetsTemp, datasetsPrecip };
 }
+
 /**
  * Initializes a Chart.js chart.
  * @param {string} canvasId - The ID of the canvas element.
@@ -78,6 +101,7 @@ function prepareChartDatasets(cityChartData) {
  * @param {Array} datasets - Datasets for the chart.
  * @param {string} yAxisLabel - Label for the Y-axis.
  * @param {boolean} beginAtZeroY - Whether the Y-axis should start at zero.
+ * @returns {Chart|null} The created Chart instance or null if canvas not found.
  */
 function createChart(canvasId, chartType, labels, datasets, yAxisLabel, beginAtZeroY) {
     const ctx = document.getElementById(canvasId);
@@ -100,7 +124,16 @@ function createChart(canvasId, chartType, labels, datasets, yAxisLabel, beginAtZ
         },
         options: {
             responsive: true,
-            maintainAspectRatio: true, 
+            maintainAspectRatio: true,
+            animation: {
+                duration: 500 // Faster animations
+            },
+            devicePixelRatio: 2, // Better rendering on high-DPI screens
+            elements: {
+                line: {
+                    tension: 0.1 // Smoother lines without too much processing
+                }
+            },
             scales: {
                 y: {
                     beginAtZero: beginAtZeroY,
@@ -111,8 +144,21 @@ function createChart(canvasId, chartType, labels, datasets, yAxisLabel, beginAtZ
                 }
             },
             plugins: {
-                legend: { position: 'top' },
-                tooltip: { mode: 'index', intersect: false }
+                legend: { 
+                    position: 'top',
+                    labels: {
+                        // Improve legend readability for multiple cities
+                        boxWidth: 12,
+                        padding: 10
+                    }
+                },
+                tooltip: { 
+                    mode: 'index', 
+                    intersect: false,
+                    animation: {
+                        duration: 100 // Faster tooltip animations
+                    }
+                }
             }
         }
     });
@@ -123,11 +169,6 @@ document.addEventListener('DOMContentLoaded', function () {
     const monthLabels = getJsonData("monthLabelsData", true);
     const cityChartData = getJsonData("cityChartData", true);
 
-    //console.log("After getJsonData - monthLabels:", monthLabels);
-    //console.log("After getJsonData - cityChartData:", cityChartData);
-    //console.log("Is cityChartData an array?", Array.isArray(cityChartData));
-
-
     // The condition for proceeding is still good: we need actual data in the arrays.
     // An empty array from getJsonData will fail cityChartData.length > 0
     if (monthLabels && monthLabels.length > 0 &&
@@ -137,16 +178,10 @@ document.addEventListener('DOMContentLoaded', function () {
 
         if (datasetsTemp.length > 0) {
             createChart('temperatureChart', 'line', monthLabels, datasetsTemp, 'Average Temperature', false);
-        } else {
-            //console.log("No valid temperature datasets to plot after preparation.");
         }
 
         if (datasetsPrecip.length > 0) {
             createChart('precipitationChart', 'bar', monthLabels, datasetsPrecip, 'Total Precipitation', true);
-        } else {
-            //console.log("No valid precipitation datasets to plot after preparation.");
         }
-    } else {
-        //console.log("Conditions not met for chart rendering or data arrays are empty. monthLabels:", monthLabels, "cityChartData:", cityChartData);
     }
 });

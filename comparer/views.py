@@ -1,8 +1,13 @@
 from django.shortcuts import render
-import json
+from django.http import JsonResponse
+from django.conf import settings
 from datetime import datetime
+import json
+import os
+from typing import Dict, List, Tuple, Optional, Any, Union
 from .weather_utils import get_historical_annual_data_by_month, get_coordinates_for_city
 
+# --- Constants ---
 MONTH_NAMES = [
     "Jan",
     "Feb",
@@ -18,63 +23,137 @@ MONTH_NAMES = [
     "Dec",
 ]
 DEFAULT_YEAR_OFFSET = -1
+DEFAULT_TEMP_UNIT = "°C"
+DEFAULT_PRECIP_UNIT = "mm"
+
+# --- Type aliases ---
+ContextDict = Dict[str, Any]
+CityProcessingResult = Dict[str, Any]
+ChartDataItem = Dict[str, Union[str, List[float]]]
+CityYearPair = Tuple[str, int]
 
 
-def _get_initial_context():
-    """Initializes and returns the base context dictionary for the view."""
+def _get_initial_context() -> ContextDict:
+    """
+    Initializes and returns the base context dictionary for the view.
+
+    Returns:
+        A dictionary with initial context values.
+    """
     current_year = datetime.now().year
+    default_year = current_year + DEFAULT_YEAR_OFFSET
+    
     return {
         "current_year": current_year,
-        "default_selection_year": current_year + DEFAULT_YEAR_OFFSET,
-        "selected_year": current_year + DEFAULT_YEAR_OFFSET,
+        "default_selection_year": default_year,
         "form_submitted": False,
         "month_labels_for_chart": MONTH_NAMES,
         "city_data_for_chart": [],
         "error_message": None,
         "submitted_city1": "",
         "submitted_city2": "",
+        "submitted_city3": "",
+        "year_1": default_year,
+        "year_2": default_year,
+        "year_3": default_year,
+        "enable_city3": False,
         "city_details_for_display": [],
     }
 
 
-def _parse_form_input(request_post):
+def _parse_form_input(request_post: Dict) -> Tuple[List[CityYearPair], Optional[str]]:
     """
     Parses and validates form inputs from the POST request.
-    Returns a tuple: (city1_name, city2_name, selected_year, error_message)
+
+    Args:
+        request_post: The POST data from the request.
+
+    Returns:
+        A tuple containing: (list of (city_name, year) pairs, error_message)
     """
-    city1_name = request_post.get("city_name_1", "").strip().title()
-    city2_name = request_post.get("city_name_2", "").strip().title()
     error_message = None
-    selected_year = None
-
+    city_year_pairs = []
+    current_year = datetime.now().year
+    default_year = current_year + DEFAULT_YEAR_OFFSET
+    
+    # Check if city 3 is enabled
+    enable_city3 = request_post.get("enable_city3") == "on"
+    enable_city2 = request_post.get("enable_city2") == "on"
+    
+    # Process city 1 (always required)
+    city1_name = request_post.get("city_name_1", "").strip().title()
+    if not city1_name:
+        return [], "Please enter a name for City 1."
+    
     try:
-        selected_year = int(request_post.get("year"))
+        year_1 = int(request_post.get("year_1", default_year))
+        # Ensure year is not greater than current year - 1
+        if year_1 > current_year - 1:
+            year_1 = current_year - 1
     except (ValueError, TypeError):
-        error_message = "Invalid year submitted. Please enter a numeric value."
-        # Default to a sensible year if conversion fails, to prevent further errors
-        selected_year = datetime.now().year + DEFAULT_YEAR_OFFSET
+        year_1 = default_year
+        
+    city_year_pairs.append((city1_name, year_1))
+    
+    # Process city 2 (if enabled)
+    if enable_city2:
+        city2_name = request_post.get("city_name_2", "").strip().title()
+        if not city2_name:
+            return [], "Please enter a name for City 2."
+            
+        try:
+            year_2 = int(request_post.get("year_2", default_year))
+            # Ensure year is not greater than current year - 1
+            if year_2 > current_year - 1:
+                year_2 = current_year - 1
+        except (ValueError, TypeError):
+            year_2 = default_year
+            
+        city_year_pairs.append((city2_name, year_2))
+    
+    # Process city 3 (if enabled)
+    if enable_city3:
+        city3_name = request_post.get("city_name_3", "").strip().title()
+        if not city3_name:
+            return [], "Please enter a name for City 3."
+            
+        try:
+            year_3 = int(request_post.get("year_3", default_year))
+            # Ensure year is not greater than current year - 1
+            if year_3 > current_year - 1:
+                year_3 = current_year - 1
+        except (ValueError, TypeError):
+            year_3 = default_year
+            
+        city_year_pairs.append((city3_name, year_3))
+    
+    return city_year_pairs, error_message
 
-    if not error_message and (not city1_name or not city2_name):
-        error_message = "Please enter names for both cities."
 
-    return city1_name, city2_name, selected_year, error_message
-
-
-def _fetch_and_process_city_weather_data(city_name, year):
+def _fetch_and_process_city_weather_data(
+    city_name: str, year: int
+) -> CityProcessingResult:
     """
     Geocodes a city and fetches its annual historical weather data.
-    Returns a dictionary with city details, weather data, or an error message.
+
+    Args:
+        city_name: The name of the city to process.
+        year: The year for which to fetch weather data.
+
+    Returns:
+        A dictionary with city details, weather data, or an error message.
     """
     city_processing_result = {
         "name": city_name,
+        "year": year,
         "address": None,
         "error": None,
         "weather_data_raw": None,  # To hold the direct output from weather_utils
-        "temp_unit": "°C",  # Default units
-        "precip_unit": "mm",  # Default units
+        "temp_unit": DEFAULT_TEMP_UNIT,  # Default units
+        "precip_unit": DEFAULT_PRECIP_UNIT,  # Default units
     }
 
-    if not city_name:  # Should be caught by _parse_form_input, but as a safeguard
+    if not city_name:
         city_processing_result["error"] = "City name was empty."
         return city_processing_result
 
@@ -98,86 +177,150 @@ def _fetch_and_process_city_weather_data(city_name, year):
         return city_processing_result
 
     city_processing_result["weather_data_raw"] = annual_weather_data["monthly_data"]
-    city_processing_result["temp_unit"] = annual_weather_data.get("temp_unit", "°C")
-    city_processing_result["precip_unit"] = annual_weather_data.get("precip_unit", "mm")
+    city_processing_result["temp_unit"] = annual_weather_data.get(
+        "temp_unit", DEFAULT_TEMP_UNIT
+    )
+    city_processing_result["precip_unit"] = annual_weather_data.get(
+        "precip_unit", DEFAULT_PRECIP_UNIT
+    )
 
     return city_processing_result
 
 
+def _prepare_chart_data(city_result: CityProcessingResult) -> Optional[ChartDataItem]:
+    """
+    Prepares chart data from city processing result.
+
+    Args:
+        city_result: The result from _fetch_and_process_city_weather_data.
+
+    Returns:
+        A dictionary with chart data or None if no weather data is available.
+    """
+    if not city_result.get("weather_data_raw"):
+        return None
+
+    return {
+        "name": f"{city_result['name']} ({city_result['year']})",
+        "temperatures": [m["avg_temp"] for m in city_result["weather_data_raw"]],
+        "precipitations": [m["total_precip"] for m in city_result["weather_data_raw"]],
+        "temp_unit": city_result["temp_unit"],
+        "precip_unit": city_result["precip_unit"],
+    }
+
+
 def index_view(request):
+    """
+    Main view function for the weather comparison page.
+
+    Args:
+        request: The HTTP request object.
+
+    Returns:
+        Rendered HTML response.
+    """
     context = _get_initial_context()
 
     if request.method == "POST":
         context["form_submitted"] = True
-        city1_name, city2_name, selected_year, form_error = _parse_form_input(
-            request.POST
-        )
-
-        context["submitted_city1"] = city1_name
-        context["submitted_city2"] = city2_name
-        context["selected_year"] = selected_year
+        
+        # Update context with form values for re-rendering
+        context["submitted_city1"] = request.POST.get("city_name_1", "").strip()
+        context["submitted_city2"] = request.POST.get("city_name_2", "").strip()
+        context["submitted_city3"] = request.POST.get("city_name_3", "").strip()
+        context["enable_city2"] = request.POST.get("enable_city2") == "on"
+        context["enable_city3"] = request.POST.get("enable_city3") == "on"
+        
+        try:
+            context["year_1"] = int(request.POST.get("year_1", context["default_selection_year"]))
+            context["year_2"] = int(request.POST.get("year_2", context["default_selection_year"]))
+            context["year_3"] = int(request.POST.get("year_3", context["default_selection_year"]))
+            
+            # Ensure years are not greater than current year - 1
+            current_year = datetime.now().year
+            if context["year_1"] > current_year - 1:
+                context["year_1"] = current_year - 1
+            if context["year_2"] > current_year - 1:
+                context["year_2"] = current_year - 1
+            if context["year_3"] > current_year - 1:
+                context["year_3"] = current_year - 1
+        except (ValueError, TypeError):
+            # Keep default values if parsing fails
+            pass
+        
+        # Parse form input
+        city_year_pairs, form_error = _parse_form_input(request.POST)
 
         if form_error:
             context["error_message"] = form_error
-            # context['city_data_for_chart'] is already [] from _get_initial_context
             return render(request, "comparer/index.html", context)
 
-        city1_processed_data = _fetch_and_process_city_weather_data(
-            city1_name, selected_year
-        )
-        city2_processed_data = _fetch_and_process_city_weather_data(
-            city2_name, selected_year
-        )
+        # Process cities
+        processed_cities = []
+        chart_data_list = []
 
-        context["city_details_for_display"] = [
-            city1_processed_data,
-            city2_processed_data,
-        ]
+        for city_name, year in city_year_pairs:
+            city_result = _fetch_and_process_city_weather_data(city_name, year)
+            processed_cities.append(city_result)
 
-        chart_data_for_python_list = []  # Use a different name to avoid confusion
-        if city1_processed_data.get("weather_data_raw"):
-            chart_data_for_python_list.append(
-                {
-                    "name": city1_processed_data["name"],
-                    "temperatures": [
-                        m["avg_temp"] for m in city1_processed_data["weather_data_raw"]
-                    ],
-                    "precipitations": [
-                        m["total_precip"]
-                        for m in city1_processed_data["weather_data_raw"]
-                    ],
-                    "temp_unit": city1_processed_data["temp_unit"],
-                    "precip_unit": city1_processed_data["precip_unit"],
-                }
-            )
+            chart_data = _prepare_chart_data(city_result)
+            if chart_data:
+                chart_data_list.append(chart_data)
 
-        if city2_processed_data.get("weather_data_raw"):
-            chart_data_for_python_list.append(
-                {
-                    "name": city2_processed_data["name"],
-                    "temperatures": [
-                        m["avg_temp"] for m in city2_processed_data["weather_data_raw"]
-                    ],
-                    "precipitations": [
-                        m["total_precip"]
-                        for m in city2_processed_data["weather_data_raw"]
-                    ],
-                    "temp_unit": city2_processed_data["temp_unit"],
-                    "precip_unit": city2_processed_data["precip_unit"],
-                }
-            )
+        context["city_details_for_display"] = processed_cities
+        context["city_data_for_chart"] = chart_data_list
 
-        # Pass the Python list directly to the context for json_script
-        context["city_data_for_chart"] = chart_data_for_python_list
-
-        if not chart_data_for_python_list and not form_error:  # Check the Python list
-            all_errors = [
-                d["error"] for d in context["city_details_for_display"] if d["error"]
-            ]
-            if len(all_errors) == 2:
+        if not chart_data_list and not form_error:
+            all_errors = [d["error"] for d in processed_cities if d["error"]]
+            if len(all_errors) == len(city_year_pairs):
                 context["error_message"] = (
-                    "Could not generate chart data. Weather data might be unavailable or city names incorrect for both entries."
+                    "Could not generate chart data. Weather data might be unavailable or city names incorrect."
                 )
-    # For GET requests, month_labels_for_chart and city_data_for_chart (as []) are already set by _get_initial_context
 
     return render(request, "comparer/index.html", context)
+
+
+def city_data_view(request):
+    """
+    Serve city data for autocomplete functionality.
+    
+    Args:
+        request: The HTTP request object.
+        
+    Returns:
+        JsonResponse with city data.
+    """
+    try:
+        # Path to the city list JSON file
+        city_list_path = os.path.join(settings.BASE_DIR, 'city.list.json')
+        
+        # Check if file exists
+        if not os.path.exists(city_list_path):
+            return JsonResponse({'error': 'City data file not found'}, status=404)
+        
+        # Read the file in chunks to handle large file size
+        with open(city_list_path, 'r', encoding='utf-8') as file:
+            # Read only the first 5000 cities for performance
+            # In a production environment, you would implement proper pagination
+            # or use a database instead of reading from a file
+            data = json.loads(file.read())[:5000]
+            
+        # Filter out cities with non-ASCII characters that might cause display issues
+        filtered_data = []
+        for city in data:
+            try:
+                # Check if the city name can be encoded in ASCII
+                city['name'].encode('ascii')
+                filtered_data.append({
+                    'id': city['id'],
+                    'name': city['name'],
+                    'state': city.get('state', ''),
+                    'country': city['country']
+                })
+            except UnicodeEncodeError:
+                # Skip cities with non-ASCII characters
+                continue
+                
+        return JsonResponse(filtered_data, safe=False)
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)

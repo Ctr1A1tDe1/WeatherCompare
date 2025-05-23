@@ -6,8 +6,21 @@
 class CityAutocomplete {
     constructor() {
         this.cities = [];
-        this.setupAutocomplete();
-        this.loadCities();
+    }
+
+    /**
+     * Initialize the autocomplete functionality
+     * This method handles both setup and async city loading
+     */
+    async init() {
+        try {
+            this.setupAutocomplete();
+            await this.loadCities();
+        } catch (error) {
+            console.error('Error initializing CityAutocomplete:', error);
+            // Fallback to common cities if initialization fails
+            this.cities = this.getCommonCities();
+        }
     }
 
     /**
@@ -214,5 +227,13 @@ class CityAutocomplete {
     }
 }
 
-// Initialize autocomplete
-new CityAutocomplete();
+// Initialize autocomplete when the script loads
+(async () => {
+    try {
+        const cityAutocomplete = new CityAutocomplete();
+        await cityAutocomplete.init();
+        console.log('CityAutocomplete initialized successfully');
+    } catch (error) {
+        console.error('Failed to initialize CityAutocomplete:', error);
+    }
+})();

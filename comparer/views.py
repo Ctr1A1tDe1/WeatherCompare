@@ -76,56 +76,22 @@ def _parse_form_input(request_post: Dict) -> Tuple[List[CityYearPair], Optional[
     current_year = datetime.now().year
     default_year = current_year + DEFAULT_YEAR_OFFSET
     
-    # Check if city 3 is enabled
-    enable_city3 = request_post.get("enable_city3") == "on"
-    enable_city2 = request_post.get("enable_city2") == "on"
-    
     # Process city 1 (always required)
     city1_name = request_post.get("city_name_1", "").strip().title()
     if not city1_name:
         return [], "Please enter a name for City 1."
-    
-    try:
-        year_1 = int(request_post.get("year_1", default_year))
-        # Ensure year is not greater than current year - 1
-        if year_1 > current_year - 1:
-            year_1 = current_year - 1
-    except (ValueError, TypeError):
-        year_1 = default_year
         
-    city_year_pairs.append((city1_name, year_1))
+    city_year_pairs.append((city1_name, default_year))
     
-    # Process city 2 (if enabled)
-    if enable_city2:
-        city2_name = request_post.get("city_name_2", "").strip().title()
-        if not city2_name:
-            return [], "Please enter a name for City 2."
-            
-        try:
-            year_2 = int(request_post.get("year_2", default_year))
-            # Ensure year is not greater than current year - 1
-            if year_2 > current_year - 1:
-                year_2 = current_year - 1
-        except (ValueError, TypeError):
-            year_2 = default_year
-            
-        city_year_pairs.append((city2_name, year_2))
+    # Process city 2 (if provided)
+    city2_name = request_post.get("city_name_2", "").strip().title()
+    if city2_name:
+        city_year_pairs.append((city2_name, default_year))
     
-    # Process city 3 (if enabled)
-    if enable_city3:
-        city3_name = request_post.get("city_name_3", "").strip().title()
-        if not city3_name:
-            return [], "Please enter a name for City 3."
-            
-        try:
-            year_3 = int(request_post.get("year_3", default_year))
-            # Ensure year is not greater than current year - 1
-            if year_3 > current_year - 1:
-                year_3 = current_year - 1
-        except (ValueError, TypeError):
-            year_3 = default_year
-            
-        city_year_pairs.append((city3_name, year_3))
+    # Process city 3 (if provided)
+    city3_name = request_post.get("city_name_3", "").strip().title()
+    if city3_name:
+        city_year_pairs.append((city3_name, default_year))
     
     return city_year_pairs, error_message
 
@@ -228,25 +194,6 @@ def index_view(request):
         context["submitted_city1"] = request.POST.get("city_name_1", "").strip()
         context["submitted_city2"] = request.POST.get("city_name_2", "").strip()
         context["submitted_city3"] = request.POST.get("city_name_3", "").strip()
-        context["enable_city2"] = request.POST.get("enable_city2") == "on"
-        context["enable_city3"] = request.POST.get("enable_city3") == "on"
-        
-        try:
-            context["year_1"] = int(request.POST.get("year_1", context["default_selection_year"]))
-            context["year_2"] = int(request.POST.get("year_2", context["default_selection_year"]))
-            context["year_3"] = int(request.POST.get("year_3", context["default_selection_year"]))
-            
-            # Ensure years are not greater than current year - 1
-            current_year = datetime.now().year
-            if context["year_1"] > current_year - 1:
-                context["year_1"] = current_year - 1
-            if context["year_2"] > current_year - 1:
-                context["year_2"] = current_year - 1
-            if context["year_3"] > current_year - 1:
-                context["year_3"] = current_year - 1
-        except (ValueError, TypeError):
-            # Keep default values if parsing fails
-            pass
         
         # Parse form input
         city_year_pairs, form_error = _parse_form_input(request.POST)

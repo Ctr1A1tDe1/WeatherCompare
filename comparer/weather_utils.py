@@ -12,8 +12,10 @@ from django.core.cache import cache
 
 # --- Constants for API interaction ---
 OPEN_METEO_ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
+OPEN_METEO_CURRENT_URL = "https://api.open-meteo.com/v1/forecast"
 API_TIMEOUT_SECONDS = 20  # Increased timeout for potentially larger annual data
-DAILY_METRICS = "temperature_2m_mean,precipitation_sum"
+DAILY_METRICS = "temperature_2m_mean,precipitation_sum"  # Fixed: removed unsupported parameters for archive API
+CURRENT_METRICS = "temperature_2m,relativehumidity_2m,windspeed_10m,winddirection_10m,weathercode"
 TIMEZONE = "GMT"  # Or use "auto" to guess from lat/lon
 
 # --- Cache durations in seconds ---
@@ -132,8 +134,8 @@ def get_coordinates_for_city(city_name: str) -> Optional[CoordinatesDict]:
         print("Warning: Empty city name provided for geocoding.")
         return None
 
-    # Create a cache key
-    cache_key = f"geocode_{city_name.lower().strip()}"
+    # Create a cache key - replace spaces with underscores to avoid memcached issues
+    cache_key = f"geocode_{city_name.lower().strip().replace(' ', '_')}"
 
     # Try to get from cache
     cached_coords = cache.get(cache_key)
@@ -325,7 +327,7 @@ def _aggregate_daily_data_to_monthly(
 
     try:
         # Use more efficient resampling with vectorized operations
-        monthly_stats = daily_df.resample("M").agg(
+        monthly_stats = daily_df.resample("ME").agg(
             {"temperature_2m_mean": "mean", "precipitation_sum": "sum"}
         )
 
@@ -357,6 +359,257 @@ def _aggregate_daily_data_to_monthly(
     except Exception as e:
         print(f"Error during monthly aggregation: {e}")
         return []
+
+
+# --- Weather Icon Constants ---
+ICON_CLOUD_DRIZZLE = "fas fa-cloud-drizzle"
+ICON_CLOUD_RAIN = "fas fa-cloud-rain"
+ICON_CLOUD_SHOWERS_HEAVY = "fas fa-cloud-showers-heavy"
+ICON_SNOWFLAKE = "fas fa-snowflake"
+ICON_BOLT = "fas fa-bolt"
+
+# --- Weather Code to Icon Mapping ---
+WEATHER_CODE_ICONS = {
+    0: "fas fa-sun",  # Clear sky
+    1: "fas fa-sun",  # Mainly clear
+    2: "fas fa-cloud-sun",  # Partly cloudy
+    3: "fas fa-cloud",  # Overcast
+    45: "fas fa-smog",  # Fog
+    48: "fas fa-smog",  # Depositing rime fog
+    51: ICON_CLOUD_DRIZZLE,  # Light drizzle
+    53: ICON_CLOUD_DRIZZLE,  # Moderate drizzle
+    55: ICON_CLOUD_DRIZZLE,  # Dense drizzle
+    56: ICON_CLOUD_DRIZZLE,  # Light freezing drizzle
+    57: ICON_CLOUD_DRIZZLE,  # Dense freezing drizzle
+    61: ICON_CLOUD_RAIN,  # Slight rain
+    63: ICON_CLOUD_RAIN,  # Moderate rain
+    65: ICON_CLOUD_SHOWERS_HEAVY,  # Heavy rain
+    66: ICON_CLOUD_RAIN,  # Light freezing rain
+    67: ICON_CLOUD_SHOWERS_HEAVY,  # Heavy freezing rain
+    71: ICON_SNOWFLAKE,  # Slight snow fall
+    73: ICON_SNOWFLAKE,  # Moderate snow fall
+    75: ICON_SNOWFLAKE,  # Heavy snow fall
+    77: ICON_SNOWFLAKE,  # Snow grains
+    80: ICON_CLOUD_RAIN,  # Slight rain showers
+    81: ICON_CLOUD_RAIN,  # Moderate rain showers
+    82: ICON_CLOUD_SHOWERS_HEAVY,  # Violent rain showers
+    85: ICON_SNOWFLAKE,  # Slight snow showers
+    86: ICON_SNOWFLAKE,  # Heavy snow showers
+    95: ICON_BOLT,  # Thunderstorm
+    96: ICON_BOLT,  # Thunderstorm with slight hail
+    99: ICON_BOLT,  # Thunderstorm with heavy hail
+}
+
+WEATHER_CODE_DESCRIPTIONS = {
+    0: "Clear sky",
+    1: "Mainly clear",
+    2: "Partly cloudy",
+    3: "Overcast",
+    45: "Fog",
+    48: "Depositing rime fog",
+    51: "Light drizzle",
+    53: "Moderate drizzle",
+    55: "Dense drizzle",
+    56: "Light freezing drizzle",
+    57: "Dense freezing drizzle",
+    61: "Slight rain",
+    63: "Moderate rain",
+    65: "Heavy rain",
+    66: "Light freezing rain",
+    67: "Heavy freezing rain",
+    71: "Slight snow fall",
+    73: "Moderate snow fall",
+    75: "Heavy snow fall",
+    77: "Snow grains",
+    80: "Slight rain showers",
+    81: "Moderate rain showers",
+    82: "Violent rain showers",
+    85: "Slight snow showers",
+    86: "Heavy snow showers",
+    95: "Thunderstorm",
+    96: "Thunderstorm with slight hail",
+    99: "Thunderstorm with heavy hail",
+}
+
+
+# --- Current Weather Functions ---
+def get_current_weather_data(latitude: float, longitude: float) -> Optional[Dict[str, Any]]:
+    """
+    Fetches current weather data from Open-Meteo API.
+    
+    Args:
+        latitude: Latitude of the location.
+        longitude: Longitude of the location.
+        
+    Returns:
+        Dictionary with current weather data or None if failed.
+    """
+    # Apply rate limiting
+    OPEN_METEO_RATE_LIMITER.wait_if_needed()
+    
+    # Create cache key for current weather (shorter cache duration)
+    cache_key = f"current_weather_{latitude}_{longitude}"
+    
+    # Try to get from cache (shorter duration for current weather)
+    cached_data = cache.get(cache_key)
+    if cached_data:
+        return cached_data
+    
+    params = {
+        "latitude": latitude,
+        "longitude": longitude,
+        "current": CURRENT_METRICS,
+        "timezone": "auto",
+        "forecast_days": 1
+    }
+    
+    try:
+        response = requests.get(
+            OPEN_METEO_CURRENT_URL, params=params, timeout=API_TIMEOUT_SECONDS
+        )
+        response.raise_for_status()
+        
+        api_data = response.json()
+        
+        if not api_data.get("current"):
+            print(f"Warning: No current weather data in API response for ({latitude},{longitude})")
+            return None
+            
+        current_data = api_data["current"]
+        
+        # Extract and process current weather data
+        weather_code = current_data.get("weathercode", 0)
+        
+        result = {
+            "temperature": round(current_data.get("temperature_2m", 0), 1),
+            "humidity": round(current_data.get("relativehumidity_2m", 0)),
+            "wind_speed": round(current_data.get("windspeed_10m", 0), 1),
+            "wind_direction": current_data.get("winddirection_10m", 0),
+            "weather_code": weather_code,
+            "weather_icon": WEATHER_CODE_ICONS.get(weather_code, "fas fa-question"),
+            "weather_description": WEATHER_CODE_DESCRIPTIONS.get(weather_code, "Unknown"),
+            "temp_unit": api_data.get("current_units", {}).get("temperature_2m", "°C"),
+            "wind_unit": api_data.get("current_units", {}).get("windspeed_10m", "km/h"),
+            "timestamp": current_data.get("time", "")
+        }
+        
+        # Cache for 10 minutes (current weather changes frequently)
+        cache.set(cache_key, result, 600)
+        return result
+        
+    except requests.exceptions.RequestException as e:
+        print(f"Current weather API request error for ({latitude},{longitude}): {e}")
+        return None
+    except ValueError as e:
+        print(f"Current weather JSON decode error for ({latitude},{longitude}): {e}")
+        return None
+    except Exception as e:
+        print(f"Unexpected error fetching current weather for ({latitude},{longitude}): {e}")
+        return None
+
+
+def _get_data_for_month(all_monthly_data: List[Dict], month: int) -> Dict[str, Optional[float]]:
+    """
+    Extract and calculate averages for a specific month from all data points.
+    
+    Args:
+        all_monthly_data: List of all monthly data points
+        month: Month number (1-12)
+        
+    Returns:
+        Dictionary with month, avg_temp and total_precip
+    """
+    # Extract values for this month
+    temps = []
+    precips = []
+    
+    for data in all_monthly_data:
+        if data["month"] == month:
+            if data["avg_temp"] is not None:
+                temps.append(data["avg_temp"])
+            if data["total_precip"] is not None:
+                precips.append(data["total_precip"])
+    
+    # Calculate averages
+    avg_temp = round(sum(temps) / len(temps), 2) if temps else None
+    avg_precip = round(sum(precips) / len(precips), 2) if precips else None
+    
+    return {
+        "month": month,
+        "avg_temp": avg_temp,
+        "total_precip": avg_precip
+    }
+
+
+def get_historical_5year_average_data(
+    latitude: float, longitude: float, end_year: int = None, num_years: int = 5
+) -> Optional[WeatherDataDict]:
+    """
+    Fetches and processes historical weather data for multiple years,
+    calculating 5-year averages for monthly data.
+    
+    Args:
+        latitude: Latitude of the location.
+        longitude: Longitude of the location.
+        end_year: The last year to include (defaults to current year - 1).
+        num_years: Number of years to average (default 5).
+        
+    Returns:
+        Dictionary with 5-year averaged monthly data or None if failed.
+    """
+    # Set default end year if not provided
+    if end_year is None:
+        end_year = datetime.now().year - 1
+    
+    start_year = end_year - num_years + 1
+    
+    # Check cache first
+    cache_key = f"weather_5year_{latitude}_{longitude}_{start_year}_{end_year}"
+    cached_data = cache.get(cache_key)
+    if cached_data:
+        return cached_data
+    
+    # Collect data from all years
+    all_data = []
+    temp_unit = DEFAULT_TEMP_UNIT
+    precip_unit = DEFAULT_PRECIP_UNIT
+    
+    # Get data for each year in range
+    for year in range(start_year, end_year + 1):
+        year_data = get_historical_annual_data_by_month(latitude, longitude, year)
+        
+        # Skip years with no data
+        if not year_data or not year_data.get("monthly_data"):
+            continue
+            
+        # Add this year's data to our collection
+        all_data.extend(year_data["monthly_data"])
+        
+        # Use units from first successful response
+        if temp_unit == DEFAULT_TEMP_UNIT:
+            temp_unit = year_data.get("temp_unit", DEFAULT_TEMP_UNIT)
+            precip_unit = year_data.get("precip_unit", DEFAULT_PRECIP_UNIT)
+    
+    # Return None if no data was collected
+    if not all_data:
+        print(f"No historical data for {num_years}-year average at ({latitude},{longitude})")
+        return None
+    
+    # Calculate averages for each month
+    monthly_averages = [_get_data_for_month(all_data, month) for month in range(1, 13)]
+    
+    # Create result dictionary
+    result = {
+        "monthly_data": monthly_averages,
+        "temp_unit": temp_unit,
+        "precip_unit": precip_unit,
+        "year_range": f"{start_year}-{end_year}"
+    }
+    
+    # Cache the result
+    cache.set(cache_key, result, WEATHER_CACHE_DURATION * 7)
+    
+    return result
 
 
 # --- Main Public Function ---

@@ -10,11 +10,10 @@
 function getJsonData(elementId, expectArray = false) {
     const element = document.getElementById(elementId);
     if (!element) {
-        console.warn(`Element with ID '${elementId}' not found.`);
-        return null;
+        // This is expected during initial page load - no need for warning
+        return expectArray ? [] : null;
     }
     if (element.textContent.trim() === "") {
-        console.warn(`Element with ID '${elementId}' has empty text content.`);
         return expectArray ? [] : null;
     }
     try {
@@ -164,24 +163,44 @@ function createChart(canvasId, chartType, labels, datasets, yAxisLabel, beginAtZ
     });
 }
 
+/**
+ * Render weather charts with the provided data
+ * @param {Array} monthLabels - Array of month labels
+ * @param {Array} cityChartData - Array of city data objects
+ */
+function renderWeatherCharts(monthLabels, cityChartData) {
+    if (!monthLabels || !cityChartData || !Array.isArray(monthLabels) || !Array.isArray(cityChartData)) {
+        console.warn('Invalid data provided to renderWeatherCharts');
+        return;
+    }
+    
+    if (monthLabels.length === 0 || cityChartData.length === 0) {
+        console.warn('Empty data provided to renderWeatherCharts');
+        return;
+    }
+    
+    const { datasetsTemp, datasetsPrecip } = prepareChartDatasets(cityChartData);
+    
+    if (datasetsTemp.length > 0) {
+        createChart('temperatureChart', 'line', monthLabels, datasetsTemp, 'Average Temperature', false);
+    }
+    
+    if (datasetsPrecip.length > 0) {
+        createChart('precipitationChart', 'bar', monthLabels, datasetsPrecip, 'Total Precipitation', true);
+    }
+}
+
 // Main logic execution
 document.addEventListener('DOMContentLoaded', function () {
+    // Try to get data from embedded script tags (server-side rendering)
     const monthLabels = getJsonData("monthLabelsData", true);
     const cityChartData = getJsonData("cityChartData", true);
-
-    // The condition for proceeding is still good: we need actual data in the arrays.
-    // An empty array from getJsonData will fail cityChartData.length > 0
-    if (monthLabels && monthLabels.length > 0 &&
-        cityChartData && cityChartData.length > 0) { // The Array.isArray check is now handled inside getJsonData if expectArray=true
-        
-        const { datasetsTemp, datasetsPrecip } = prepareChartDatasets(cityChartData); 
-
-        if (datasetsTemp.length > 0) {
-            createChart('temperatureChart', 'line', monthLabels, datasetsTemp, 'Average Temperature', false);
-        }
-
-        if (datasetsPrecip.length > 0) {
-            createChart('precipitationChart', 'bar', monthLabels, datasetsPrecip, 'Total Precipitation', true);
-        }
+    
+    // Only try to render if we have data from server-side rendering
+    if (monthLabels && monthLabels.length > 0 && cityChartData && cityChartData.length > 0) {
+        renderWeatherCharts(monthLabels, cityChartData);
     }
+    
+    // Make the function available globally for client-side rendering
+    window.renderWeatherCharts = renderWeatherCharts;
 });

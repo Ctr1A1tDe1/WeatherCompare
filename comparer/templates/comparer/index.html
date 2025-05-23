@@ -37,7 +37,7 @@
     <div class="container">
 
         <div class="form-section">
-            <form method="POST" action="{% url 'comparer:index' %}">
+            <form id="weather-form" method="POST" action="{% url 'comparer:index' %}">
                 {% csrf_token %}
                 <div class="city-controls">
                     <div class="city-count-selector">
@@ -70,36 +70,154 @@
                     </div>
                 </div>
                 
-                
                 <div class="form-group submit-container">
                     <button type="submit" id="submit-button">Compare Weather</button>
                 </div>
             </form>
         </div>
 
+        <!-- Processing Indicator -->
+        <div class="processing-indicator" id="processing-indicator">
+            <div class="spinner"></div>
+            <span>Processing weather data...</span>
+        </div>
+
+        <div id="results"></div>
+
         {% if error_message %}
             <p class="error-message">{{ error_message }}</p>
         {% endif %}
+        
+        <footer>
+            <p>Geocoding by Nominatim (OpenStreetMap). Current and historical weather data by Open-Meteo.</p>
+        </footer>
+    </div>
 
-        {% if form_submitted and not error_message %}
-            <h2>Weather Comparison</h2>
-            {% if city_details_for_display %}
-                <div class="city-details-section">
-                {% for detail in city_details_for_display %}
-                    <div class="city-info-display">
-                        <h4>{{ detail.name }}</h4>
-                        {% if detail.address %}<p><small><em>Found: {{ detail.address }}</em></small></p>{% endif %}
-                        {% if detail.error %}
-                            <p class="error-message">Error: {{ detail.error }}</p>
-                        {% else %}
-                            <p><small>Temp Unit: {{ detail.temp_unit }}, Precip Unit: {{ detail.precip_unit }}</small></p>
-                        {% endif %}
-                    </div>
-                {% endfor %}
-                </div>
-            {% endif %}
+    {# JavaScript Files #}
+    <script src="{% static 'comparer/js/theme_controls.js' %}"></script>
+    <script src="{% static 'comparer/js/form_controls.js' %}"></script>
+    <script src="{% static 'comparer/js/autocomplete.js' %}"></script>
+    <script src="{% static 'comparer/js/main_charts.js' %}"></script>
+    <script>
+    // Async form submission and dynamic rendering
+    document.addEventListener('DOMContentLoaded', function() {
+        const form = document.getElementById('weather-form');
+        const results = document.getElementById('results');
+        const processingIndicator = document.getElementById('processing-indicator');
+        const submitButton = document.getElementById('submit-button');
+
+        function showProcessing() {
+            processingIndicator.classList.add('show');
+            if (submitButton) submitButton.disabled = true;
+            // Use the global function from form_controls.js
+            window.showLoadingState();
+        }
+        function hideProcessing() {
+            processingIndicator.classList.remove('show');
+            if (submitButton) submitButton.disabled = false;
+            // Use the global function from form_controls.js
+            window.hideLoadingState();
+        }
+
+        /**
+         * Gather city names from input fields
+         * @returns {Array} Array of city names
+         */
+        function gatherCityNames() {
+            const cities = [];
+            for (let i = 1; i <= 3; i++) {
+                const input = document.getElementById('city_name_' + i);
+                if (input && input.value.trim()) {
+                    cities.push(input.value.trim());
+                }
+            }
+            return cities;
+        }
+        
+        /**
+         * Render weather cards based on API data
+         * @param {Object} data - API response data
+         * @returns {string} HTML for weather cards
+         */
+        function renderWeatherCards(data) {
+            if (!data.weather_cards_data || data.weather_cards_data.length === 0) {
+                return '<p class="error-message">No weather data found.</p>';
+            }
             
-            {% if city_data_for_chart %}
+            let cardsHtml = '<h2>Current Weather</h2>';
+            
+            // Determine card container class based on number of cards
+            let containerClass = 'one-card';
+            if (data.weather_cards_data.length === 2) {
+                containerClass = 'two-cards';
+            } else if (data.weather_cards_data.length === 3) {
+                containerClass = 'three-cards';
+            }
+            
+            cardsHtml += `<div class="weather-cards-container ${containerClass}">`;
+            
+            // Add each weather card
+            for (const card of data.weather_cards_data) {
+                if (card.error) {
+                    cardsHtml += `
+                        <div class="weather-card">
+                            <div class="weather-card-error">
+                                <h4>${card.name}</h4>
+                                <p class="error-message">${card.error}</p>
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    cardsHtml += `
+                <div class="weather-card">
+                    <div class="weather-header">
+                        <h4 class="city-name">${card.name}</h4>
+                        <span class="day-date">${card.day_date}</span>
+                    </div>
+                    <div class="weather-main">
+                        <div class="temperature-section">
+                            <span class="temperature">${parseFloat(card.temperature).toFixed(1)}°</span>
+                            <span class="temp-unit">${card.temp_unit}</span>
+                        </div>
+                        <div class="weather-icon-section">
+                            <i class="weather-icon ${card.weather_icon}"></i>
+                        </div>
+                    </div>
+                    <div class="weather-details">
+                        <div class="weather-detail-item">
+                            <i class="fas fa-tint"></i>
+                            <span>${card.humidity}%</span>
+                        </div>
+                        <div class="weather-detail-item">
+                            <i class="fas fa-wind"></i>
+                            <span>${card.wind_display}</span>
+                        </div>
+                    </div>
+                    <div class="weather-description">
+                        <p>${card.weather_description}</p>
+                    </div>
+                    ${card.address ? `<div class="weather-location"><small><em>${card.address}</em></small></div>` : ''}
+                        </div>
+                    `;
+                }
+            }
+            
+            cardsHtml += '</div>';
+            return cardsHtml;
+        }
+        
+        /**
+         * Render charts based on API data
+         * @param {Object} data - API response data
+         * @returns {string} HTML for charts
+         */
+        function renderCharts(data) {
+            if (!data.city_data_for_chart || data.city_data_for_chart.length === 0) {
+                return '';
+            }
+            
+            const chartsHtml = `
+                <h2>Historical Weather Comparison (5-Year Average)</h2>
                 <div class="charts-container">
                     <div class="chart-wrapper">
                         <h3>Average Monthly Temperature Comparison</h3>
@@ -110,25 +228,66 @@
                         <canvas id="precipitationChart"></canvas>
                     </div>
                 </div>
-                 {# Pass data to JavaScript using json_script #}
-                {{ month_labels_for_chart|json_script:"monthLabelsData" }}
-                {{ city_data_for_chart|json_script:"cityChartData" }}
-            {% elif not error_message %}
-                <p style="text-align:center; color:#555;">Could not generate charts. Please check individual city messages above for details.</p>
-            {% endif %}
-        {% endif %}
+            `;
+            
+            // Initialize charts after rendering
+            setTimeout(() => {
+                window.renderWeatherCharts && window.renderWeatherCharts(
+                    ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"],
+                    data.city_data_for_chart
+                );
+            }, 0);
+            
+            return chartsHtml;
+        }
         
-        <footer>
-            <p>Geocoding by Nominatim (OpenStreetMap). Historical weather data by Open-Meteo.</p>
-        </footer>
-    </div>
+        // Handle form submission
+        form.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            results.innerHTML = '';
+            showProcessing();
 
-    {# JavaScript Files #}
-    <script src="{% static 'comparer/js/theme_controls.js' %}"></script>
-    <script src="{% static 'comparer/js/form_controls.js' %}"></script>
-    <script src="{% static 'comparer/js/autocomplete.js' %}"></script>
-    {% if form_submitted and city_data_for_chart %}
-        <script src="{% static 'comparer/js/main_charts.js' %}"></script>
-    {% endif %}
+            // Gather city names
+            const cities = gatherCityNames();
+            if (cities.length === 0) {
+                hideProcessing();
+                results.innerHTML = '<p class="error-message">Please enter at least one city.</p>';
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/weather-compare/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': form.querySelector('[name=csrfmiddlewaretoken]').value
+                    },
+                    body: JSON.stringify({ cities })
+                });
+                const data = await response.json();
+                hideProcessing();
+
+                if (data.error) {
+                    results.innerHTML = '<p class="error-message">' + data.error + '</p>';
+                    return;
+                }
+
+                // Render weather cards
+                results.innerHTML = renderWeatherCards(data);
+                
+                // Render charts if we have data
+                const chartsHtml = renderCharts(data);
+                if (chartsHtml) {
+                    results.innerHTML += chartsHtml;
+                }
+                
+            } catch (err) {
+                hideProcessing();
+                console.error('Weather data fetch error:', err);
+                results.innerHTML = '<p class="error-message">Error fetching weather data. Please try again later.</p>';
+            }
+        });
+    });
+    </script>
 </body>
 </html>

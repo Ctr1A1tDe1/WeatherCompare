@@ -1,6 +1,6 @@
 /**
  * Form controls for the Weather Compare application
- * Handles dynamic city count selection and form validation
+ * Handles dynamic city count selection, form validation, and loading states
  */
 
 document.addEventListener('DOMContentLoaded', function() {
@@ -10,8 +10,11 @@ document.addEventListener('DOMContentLoaded', function() {
     // Set up dropdown event listener
     setupDropdownListener();
     
-    // Set up form validation
+    // Set up form validation and loading states
     setupFormValidation();
+    
+    // Update weather cards container class based on city count
+    updateWeatherCardsLayout();
 });
 
 /**
@@ -20,7 +23,10 @@ document.addEventListener('DOMContentLoaded', function() {
 function setupDropdownListener() {
     const dropdown = document.getElementById('city-count-dropdown');
     if (dropdown) {
-        dropdown.addEventListener('change', updateCityCount);
+        dropdown.addEventListener('change', function() {
+            updateCityCount();
+            updateWeatherCardsLayout();
+        });
     }
 }
 
@@ -35,12 +41,12 @@ function initializeFormState() {
     
     let cityCount = 1;
     
-    if (city2Input && city2Input.value.trim()) {
+    if (city2Input?.value.trim()) {
         showCity(2);
         cityCount = 2;
     }
     
-    if (city3Input && city3Input.value.trim()) {
+    if (city3Input?.value.trim()) {
         showCity(3);
         cityCount = 3;
     }
@@ -64,6 +70,30 @@ function updateCityCount() {
             showCity(i);
         } else {
             hideCity(i);
+        }
+    }
+}
+
+/**
+ * Update weather cards container layout class
+ */
+function updateWeatherCardsLayout() {
+    const dropdown = document.getElementById('city-count-dropdown');
+    const weatherCardsContainer = document.querySelector('.weather-cards-container');
+    
+    if (dropdown && weatherCardsContainer) {
+        const selectedCount = parseInt(dropdown.value);
+        
+        // Remove existing count classes
+        weatherCardsContainer.classList.remove('one-card', 'two-cards', 'three-cards');
+        
+        // Add appropriate class
+        if (selectedCount === 1) {
+            weatherCardsContainer.classList.add('one-card');
+        } else if (selectedCount === 2) {
+            weatherCardsContainer.classList.add('two-cards');
+        } else if (selectedCount === 3) {
+            weatherCardsContainer.classList.add('three-cards');
         }
     }
 }
@@ -102,7 +132,63 @@ function hideCity(cityNumber) {
 }
 
 /**
- * Set up form validation
+ * Show loading state
+ */
+function showLoadingState() {
+    const submitButton = document.getElementById('submit-button');
+    const processingIndicator = document.querySelector('.processing-indicator');
+    
+    if (submitButton) {
+        submitButton.disabled = true;
+        submitButton.classList.add('loading');
+        submitButton.textContent = 'Processing...';
+    }
+    
+    if (processingIndicator) {
+        processingIndicator.classList.add('show');
+    }
+    
+    // Create and show loading overlay
+    const loadingOverlay = document.createElement('div');
+    loadingOverlay.className = 'loading-overlay';
+    loadingOverlay.innerHTML = `
+        <div style="text-align: center;">
+            <div class="loading-text">Fetching weather data...</div>
+        </div>
+    `;
+    document.body.appendChild(loadingOverlay);
+}
+
+/**
+ * Hide loading state
+ */
+function hideLoadingState() {
+    const submitButton = document.getElementById('submit-button');
+    const processingIndicator = document.querySelector('.processing-indicator');
+    
+    // Remove all loading overlays (in case there are multiple)
+    document.querySelectorAll('.loading-overlay').forEach(overlay => {
+        overlay.remove();
+    });
+    
+    // Remove any "Fetching weather data..." text that might be in the DOM
+    document.querySelectorAll('.loading-text').forEach(text => {
+        text.remove();
+    });
+    
+    if (submitButton) {
+        submitButton.disabled = false;
+        submitButton.classList.remove('loading');
+        submitButton.textContent = 'Compare Weather';
+    }
+    
+    if (processingIndicator) {
+        processingIndicator.classList.remove('show');
+    }
+}
+
+/**
+ * Set up form validation and loading states
  */
 function setupFormValidation() {
     const form = document.querySelector('form');
@@ -122,6 +208,9 @@ function setupFormValidation() {
                 }
             }
             
+            // Show loading state when form is submitted
+            showLoadingState();
+            
             return true;
         });
     }
@@ -129,3 +218,5 @@ function setupFormValidation() {
 
 // Make functions globally available for onclick handlers
 window.updateCityCount = updateCityCount;
+window.showLoadingState = showLoadingState;
+window.hideLoadingState = hideLoadingState;

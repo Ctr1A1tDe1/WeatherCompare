@@ -1,11 +1,13 @@
 /**
- * City Autocomplete Module
- * Provides autocomplete functionality for city input fields
+ * City Autocomplete Module - Optimized Version
+ * Provides autocomplete functionality for city input fields with improved performance
  */
 
 class CityAutocomplete {
     constructor() {
         this.cities = [];
+        this.cache = new Map(); // Cache for search results
+        this.debounceTimer = null;
     }
 
     /**
@@ -15,7 +17,10 @@ class CityAutocomplete {
     async init() {
         try {
             this.setupAutocomplete();
-            await this.loadCities();
+            // Start with common cities immediately
+            this.cities = this.getCommonCities();
+            // Load full list in background
+            this.loadCitiesInBackground();
         } catch (error) {
             console.error('Error initializing CityAutocomplete:', error);
             // Fallback to common cities if initialization fails
@@ -24,23 +29,16 @@ class CityAutocomplete {
     }
 
     /**
-     * Load city data from the server
+     * Load city data from the server in background
      */
-    async loadCities() {
+    async loadCitiesInBackground() {
         try {
-            // Start with a basic list of cities while waiting for the full list
-            this.cities = this.getCommonCities();
+            // Use the optimized endpoint with query support
+            const response = await fetch('/city-data/?limit=1000');
             
-            // Try to load the full list from the server
-            let response = await fetch('/static/city-data/');
-            
-            // If that fails, try the alternative URL
             if (!response.ok) {
-                console.log('First URL failed, trying alternative URL...');
-                response = await fetch('/city-data/');
-                if (!response.ok) {
-                    throw new Error(`Failed to load city data: ${response.status}`);
-                }
+                console.warn('Failed to load extended city data, using common cities');
+                return;
             }
             
             const fullCityList = await response.json();
@@ -51,13 +49,17 @@ class CityAutocomplete {
                 this.cities = fullCityList.map(city => {
                     return {
                         ...city,
-                        searchName: city.name.toLowerCase()
+                        searchName: city.name.toLowerCase(),
+                        displayName: `${city.name}${city.state ? ', ' + city.state : ''}, ${city.country}`
                     };
                 });
+                
+                // Clear cache since we have new data
+                this.cache.clear();
             }
         } catch (error) {
-            console.error('Error loading city data:', error);
-            // Already using fallback list from getCommonCities()
+            console.warn('Error loading extended city data:', error);
+            // Continue using common cities
         }
     }
     
@@ -66,30 +68,43 @@ class CityAutocomplete {
      * This is a fallback method that doesn't require loading the full city.list.json
      */
     getCommonCities() {
-        return [
-            { id: 1, name: "London", country: "GB" },
-            { id: 2, name: "New York", country: "US" },
-            { id: 3, name: "Tokyo", country: "JP" },
-            { id: 4, name: "Paris", country: "FR" },
-            { id: 5, name: "Berlin", country: "DE" },
-            { id: 6, name: "Rome", country: "IT" },
-            { id: 7, name: "Madrid", country: "ES" },
-            { id: 8, name: "Moscow", country: "RU" },
-            { id: 9, name: "Beijing", country: "CN" },
-            { id: 10, name: "Sydney", country: "AU" },
-            { id: 11, name: "Bangkok", country: "TH" },
-            { id: 12, name: "Singapore", country: "SG" },
-            { id: 13, name: "Dubai", country: "AE" },
-            { id: 14, name: "Istanbul", country: "TR" },
-            { id: 15, name: "Amsterdam", country: "NL" },
-            { id: 16, name: "Hong Kong", country: "HK" },
-            { id: 17, name: "Seoul", country: "KR" },
-            { id: 18, name: "Chicago", country: "US" },
-            { id: 19, name: "Los Angeles", country: "US" },
-            { id: 20, name: "San Francisco", country: "US" }
-        ].map(city => ({
+        const commonCities = [
+            { id: 1, name: "London", country: "GB", state: "" },
+            { id: 2, name: "New York", country: "US", state: "NY" },
+            { id: 3, name: "Tokyo", country: "JP", state: "" },
+            { id: 4, name: "Paris", country: "FR", state: "" },
+            { id: 5, name: "Berlin", country: "DE", state: "" },
+            { id: 6, name: "Rome", country: "IT", state: "" },
+            { id: 7, name: "Madrid", country: "ES", state: "" },
+            { id: 8, name: "Moscow", country: "RU", state: "" },
+            { id: 9, name: "Beijing", country: "CN", state: "" },
+            { id: 10, name: "Sydney", country: "AU", state: "" },
+            { id: 11, name: "Bangkok", country: "TH", state: "" },
+            { id: 12, name: "Singapore", country: "SG", state: "" },
+            { id: 13, name: "Dubai", country: "AE", state: "" },
+            { id: 14, name: "Istanbul", country: "TR", state: "" },
+            { id: 15, name: "Amsterdam", country: "NL", state: "" },
+            { id: 16, name: "Hong Kong", country: "HK", state: "" },
+            { id: 17, name: "Seoul", country: "KR", state: "" },
+            { id: 18, name: "Chicago", country: "US", state: "IL" },
+            { id: 19, name: "Los Angeles", country: "US", state: "CA" },
+            { id: 20, name: "San Francisco", country: "US", state: "CA" },
+            { id: 21, name: "Mumbai", country: "IN", state: "" },
+            { id: 22, name: "Delhi", country: "IN", state: "" },
+            { id: 23, name: "Shanghai", country: "CN", state: "" },
+            { id: 24, name: "São Paulo", country: "BR", state: "" },
+            { id: 25, name: "Mexico City", country: "MX", state: "" },
+            { id: 26, name: "Cairo", country: "EG", state: "" },
+            { id: 27, name: "Lagos", country: "NG", state: "" },
+            { id: 28, name: "Buenos Aires", country: "AR", state: "" },
+            { id: 29, name: "Toronto", country: "CA", state: "" },
+            { id: 30, name: "Vancouver", country: "CA", state: "" }
+        ];
+        
+        return commonCities.map(city => ({
             ...city,
-            searchName: city.name.toLowerCase()
+            searchName: city.name.toLowerCase(),
+            displayName: `${city.name}${city.state ? ', ' + city.state : ''}, ${city.country}`
         }));
     }
 
@@ -134,21 +149,72 @@ class CityAutocomplete {
         autocompleteContainer.style.display = 'none';
         inputElement.parentNode.appendChild(autocompleteContainer);
         
-        // Add event listeners
+        // Add event listeners with debouncing for better performance
         inputElement.addEventListener('input', () => {
-            this.showSuggestions(inputElement, autocompleteContainer);
+            this.debouncedShowSuggestions(inputElement, autocompleteContainer);
         });
         
         inputElement.addEventListener('focus', () => {
             this.showSuggestions(inputElement, autocompleteContainer);
         });
         
+        // Handle keyboard navigation
+        inputElement.addEventListener('keydown', (e) => {
+            this.handleKeyNavigation(e, autocompleteContainer);
+        });
+        
         // Close autocomplete when clicking outside
         document.addEventListener('click', (e) => {
-            if (e.target !== inputElement) {
+            if (e.target !== inputElement && !autocompleteContainer.contains(e.target)) {
                 autocompleteContainer.style.display = 'none';
             }
         });
+    }
+
+    /**
+     * Debounced version of showSuggestions for better performance
+     */
+    debouncedShowSuggestions(inputElement, container) {
+        clearTimeout(this.debounceTimer);
+        this.debounceTimer = setTimeout(() => {
+            this.showSuggestions(inputElement, container);
+        }, 150); // 150ms debounce
+    }
+
+    /**
+     * Handle keyboard navigation in autocomplete
+     */
+    handleKeyNavigation(event, container) {
+        const items = container.querySelectorAll('.autocomplete-item');
+        const currentActive = container.querySelector('.autocomplete-item.active');
+        
+        if (event.key === 'ArrowDown') {
+            event.preventDefault();
+            const nextItem = currentActive ? currentActive.nextElementSibling : items[0];
+            this.setActiveItem(nextItem, container);
+        } else if (event.key === 'ArrowUp') {
+            event.preventDefault();
+            const prevItem = currentActive ? currentActive.previousElementSibling : items[items.length - 1];
+            this.setActiveItem(prevItem, container);
+        } else if (event.key === 'Enter' && currentActive) {
+            event.preventDefault();
+            currentActive.click();
+        } else if (event.key === 'Escape') {
+            container.style.display = 'none';
+        }
+    }
+
+    /**
+     * Set active item in autocomplete list
+     */
+    setActiveItem(item, container) {
+        // Remove active class from all items
+        container.querySelectorAll('.autocomplete-item').forEach(i => i.classList.remove('active'));
+        // Add active class to selected item
+        if (item) {
+            item.classList.add('active');
+            item.scrollIntoView({ block: 'nearest' });
+        }
     }
 
     /**
@@ -162,14 +228,30 @@ class CityAutocomplete {
         // Clear previous suggestions
         container.innerHTML = '';
         
-        // Hide container if input is empty
-        if (!value) {
+        // Hide container if input is empty or too short
+        if (!value || value.length < 2) {
             container.style.display = 'none';
             return;
         }
         
-        // Find matching cities (limit to 10 results for performance)
-        const matches = this.findMatches(value, 10);
+        // Check cache first
+        const cacheKey = value;
+        let matches;
+        
+        if (this.cache.has(cacheKey)) {
+            matches = this.cache.get(cacheKey);
+        } else {
+            // Find matching cities (limit to 8 results for performance)
+            matches = this.findMatches(value, 8);
+            // Cache the results
+            this.cache.set(cacheKey, matches);
+            
+            // Limit cache size
+            if (this.cache.size > 100) {
+                const firstKey = this.cache.keys().next().value;
+                this.cache.delete(firstKey);
+            }
+        }
         
         if (matches.length === 0) {
             container.style.display = 'none';
@@ -177,18 +259,16 @@ class CityAutocomplete {
         }
         
         // Create suggestion elements
-        matches.forEach(city => {
+        matches.forEach((city, index) => {
             const item = document.createElement('div');
             item.className = 'autocomplete-item';
-            
-            // Format city name with country
-            const displayName = `${city.name}${city.state ? ', ' + city.state : ''}, ${city.country}`;
-            item.textContent = displayName;
+            item.textContent = city.displayName;
             
             // Handle click on suggestion
             item.addEventListener('click', () => {
                 inputElement.value = city.name;
                 container.style.display = 'none';
+                inputElement.focus();
             });
             
             container.appendChild(item);
@@ -199,6 +279,49 @@ class CityAutocomplete {
     }
 
     /**
+     * Find exact and prefix matches for a query
+     * @param {string} queryLower - Lowercase search query
+     * @param {number} limit - Maximum results to return
+     * @returns {Array} - Array of matching city objects
+     */
+    findExactAndPrefixMatches(queryLower, limit) {
+        const results = [];
+        
+        for (const city of this.cities) {
+            if (results.length >= limit) break;
+            
+            if (city.searchName === queryLower) {
+                results.unshift(city); // Exact matches first
+            } else if (city.searchName.startsWith(queryLower)) {
+                results.push(city);
+            }
+        }
+        
+        return results;
+    }
+    
+    /**
+     * Find substring matches for a query
+     * @param {string} queryLower - Lowercase search query
+     * @param {number} limit - Maximum results to return
+     * @param {Array} existingResults - Results already found
+     * @returns {Array} - Array of matching city objects
+     */
+    findSubstringMatches(queryLower, limit, existingResults) {
+        const results = [...existingResults];
+        
+        for (const city of this.cities) {
+            if (results.length >= limit) break;
+            
+            if (!city.searchName.startsWith(queryLower) && city.searchName.includes(queryLower)) {
+                results.push(city);
+            }
+        }
+        
+        return results;
+    }
+    
+    /**
      * Find matching cities based on input value
      * @param {string} query - The search query
      * @param {number} limit - Maximum number of results to return
@@ -207,23 +330,17 @@ class CityAutocomplete {
     findMatches(query, limit) {
         if (!this.cities.length) return [];
         
-        // Improved matching algorithm with better performance
-        // First check for starts with (higher priority)
-        const startsWithMatches = this.cities
-            .filter(city => city.searchName.startsWith(query))
-            .slice(0, limit);
-            
-        // If we have enough matches that start with the query, return those
-        if (startsWithMatches.length >= limit) {
-            return startsWithMatches;
-        }
+        const queryLower = query.toLowerCase();
         
-        // Otherwise, add matches that include the query anywhere in the name
-        const containsMatches = this.cities
-            .filter(city => !city.searchName.startsWith(query) && city.searchName.includes(query))
-            .slice(0, limit - startsWithMatches.length);
-            
-        return [...startsWithMatches, ...containsMatches];
+        // First pass: exact matches and starts with
+        const initialResults = this.findExactAndPrefixMatches(queryLower, limit);
+        
+        // Second pass: contains matches (if we need more results)
+        const finalResults = initialResults.length < limit 
+            ? this.findSubstringMatches(queryLower, limit, initialResults)
+            : initialResults;
+        
+        return finalResults.slice(0, limit);
     }
 }
 

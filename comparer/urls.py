@@ -8,7 +8,10 @@ urlpatterns = [
     # '' means the root URL of this app (e.g., /weather/)
     # views.index_view is the function to call
     # name='index' is a unique name for this URL pattern
-    
+
+    # API endpoint for async weather/chart data
+    path("api/weather-compare/", views.city_compare_api, name="weather_compare_api"),
+
     # API endpoints for city data (two paths for flexibility)
     path("static/city-data/", views.city_data_view, name="city_data"),
     path("city-data/", views.city_data_view, name="city_data_alt"),

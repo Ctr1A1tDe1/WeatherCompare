@@ -4,8 +4,15 @@ from django.conf import settings
 from datetime import datetime
 import json
 import os
+import asyncio
+import concurrent.futures
 from typing import Dict, List, Tuple, Optional, Any, Union
-from .weather_utils import get_historical_annual_data_by_month, get_coordinates_for_city
+from .weather_utils import (
+    get_historical_annual_data_by_month, 
+    get_coordinates_for_city,
+    get_current_weather_data,
+    get_historical_5year_average_data
+)
 
 # --- Constants ---
 MONTH_NAMES = [
@@ -22,7 +29,6 @@ MONTH_NAMES = [
     "Nov",
     "Dec",
 ]
-DEFAULT_YEAR_OFFSET = -1
 DEFAULT_TEMP_UNIT = "°C"
 DEFAULT_PRECIP_UNIT = "mm"
 
@@ -30,7 +36,7 @@ DEFAULT_PRECIP_UNIT = "mm"
 ContextDict = Dict[str, Any]
 CityProcessingResult = Dict[str, Any]
 ChartDataItem = Dict[str, Union[str, List[float]]]
-CityYearPair = Tuple[str, int]
+WeatherCardData = Dict[str, Any]
 
 
 def _get_initial_context() -> ContextDict:
@@ -41,27 +47,21 @@ def _get_initial_context() -> ContextDict:
         A dictionary with initial context values.
     """
     current_year = datetime.now().year
-    default_year = current_year + DEFAULT_YEAR_OFFSET
     
     return {
         "current_year": current_year,
-        "default_selection_year": default_year,
         "form_submitted": False,
         "month_labels_for_chart": MONTH_NAMES,
         "city_data_for_chart": [],
+        "weather_cards_data": [],
         "error_message": None,
         "submitted_city1": "",
         "submitted_city2": "",
         "submitted_city3": "",
-        "year_1": default_year,
-        "year_2": default_year,
-        "year_3": default_year,
-        "enable_city3": False,
-        "city_details_for_display": [],
     }
 
 
-def _parse_form_input(request_post: Dict) -> Tuple[List[CityYearPair], Optional[str]]:
+def _parse_form_input(request_post: Dict) -> Tuple[List[str], Optional[str]]:
     """
     Parses and validates form inputs from the POST request.
 
@@ -69,110 +69,210 @@ def _parse_form_input(request_post: Dict) -> Tuple[List[CityYearPair], Optional[
         request_post: The POST data from the request.
 
     Returns:
-        A tuple containing: (list of (city_name, year) pairs, error_message)
+        A tuple containing: (list of city names, error_message)
     """
     error_message = None
-    city_year_pairs = []
-    current_year = datetime.now().year
-    default_year = current_year + DEFAULT_YEAR_OFFSET
+    city_names = []
     
     # Process city 1 (always required)
     city1_name = request_post.get("city_name_1", "").strip().title()
     if not city1_name:
         return [], "Please enter a name for City 1."
         
-    city_year_pairs.append((city1_name, default_year))
+    city_names.append(city1_name)
     
     # Process city 2 (if provided)
     city2_name = request_post.get("city_name_2", "").strip().title()
     if city2_name:
-        city_year_pairs.append((city2_name, default_year))
+        city_names.append(city2_name)
     
     # Process city 3 (if provided)
     city3_name = request_post.get("city_name_3", "").strip().title()
     if city3_name:
-        city_year_pairs.append((city3_name, default_year))
+        city_names.append(city3_name)
     
-    return city_year_pairs, error_message
+    return city_names, error_message
 
 
-def _fetch_and_process_city_weather_data(
-    city_name: str, year: int
-) -> CityProcessingResult:
+def _get_wind_direction_text(degrees: float) -> str:
     """
-    Geocodes a city and fetches its annual historical weather data.
-
+    Convert wind direction degrees to compass direction text.
+    
     Args:
-        city_name: The name of the city to process.
-        year: The year for which to fetch weather data.
-
+        degrees: Wind direction in degrees (0-360)
+        
     Returns:
-        A dictionary with city details, weather data, or an error message.
+        Compass direction string (e.g., "N", "NE", "SW")
     """
-    city_processing_result = {
-        "name": city_name,
-        "year": year,
-        "address": None,
-        "error": None,
-        "weather_data_raw": None,  # To hold the direct output from weather_utils
-        "temp_unit": DEFAULT_TEMP_UNIT,  # Default units
-        "precip_unit": DEFAULT_PRECIP_UNIT,  # Default units
-    }
+    if degrees is None:
+        return "N/A"
+    
+    directions = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+                  "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
+    
+    # Normalize degrees to 0-360 range
+    degrees = degrees % 360
+    
+    # Calculate index (16 directions, so 360/16 = 22.5 degrees per direction)
+    index = round(degrees / 22.5) % 16
+    
+    return directions[index]
 
+
+def _process_city_data(city_name: str) -> Tuple[Optional[WeatherCardData], Optional[ChartDataItem]]:
+    """
+    Process a single city to get both current weather and historical data.
+    
+    Args:
+        city_name: Name of the city to process
+        
+    Returns:
+        Tuple of (weather_card_data, chart_data) - either can be None if failed
+    """
+    # Input validation and sanitization
+    if not city_name or not isinstance(city_name, str):
+        return None, None
+    
+    # Sanitize city name to prevent injection attacks
+    city_name = city_name.strip()[:100]  # Limit length
     if not city_name:
-        city_processing_result["error"] = "City name was empty."
-        return city_processing_result
-
+        return None, None
+    
+    # Get coordinates
     coordinates = get_coordinates_for_city(city_name)
     if not coordinates:
-        city_processing_result["error"] = (
-            f"Could not find coordinates for '{city_name}'. Please check the name."
-        )
-        return city_processing_result
+        print(f"Could not find coordinates for '{city_name}'")
+        return None, None
+    
+    latitude = coordinates["latitude"]
+    longitude = coordinates["longitude"]
+    address = coordinates.get("address", "")
+    
+    # Initialize result containers
+    weather_card_data = None
+    chart_data = None
+    
+    # Get current weather for the card
+    try:
+        current_weather = get_current_weather_data(latitude, longitude)
+        if current_weather:
+            # Get current date info
+            now = datetime.now()
+            day_name = now.strftime("%a")
+            day_number = now.strftime("%d")
+            
+            # Format wind direction
+            wind_dir_text = _get_wind_direction_text(current_weather.get("wind_direction", 0))
+            wind_speed = current_weather.get("wind_speed", 0)
+            wind_unit = current_weather.get("wind_unit", "km/h")
+            
+            weather_card_data = {
+                "name": city_name,
+                "address": address,
+                "day_date": f"{day_name} {day_number} | Day",
+                "temperature": current_weather.get("temperature", 0),
+                "temp_unit": current_weather.get("temp_unit", "°C"),
+                "humidity": current_weather.get("humidity", 0),
+                "wind_speed": wind_speed,
+                "wind_direction": wind_dir_text,
+                "wind_unit": wind_unit,
+                "wind_display": f"{wind_dir_text} {wind_speed} {wind_unit}",
+                "weather_icon": current_weather.get("weather_icon", "fas fa-question"),
+                "weather_description": current_weather.get("weather_description", "Unknown conditions"),
+                "error": None
+            }
+    except Exception as e:
+        print(f"Error fetching current weather for {city_name}: {e}")
+        weather_card_data = {
+            "name": city_name,
+            "address": address,
+            "error": f"Could not fetch current weather data for {city_name}"
+        }
+    
+    # Get 5-year historical averages for the chart
+    try:
+        historical_data = get_historical_5year_average_data(latitude, longitude)
+        if historical_data and historical_data.get("monthly_data"):
+            year_range = historical_data.get("year_range", "5-Year Average")
+            
+            chart_data = {
+                "name": f"{city_name} ({year_range})",
+                "temperatures": [m["avg_temp"] for m in historical_data["monthly_data"]],
+                "precipitations": [m["total_precip"] for m in historical_data["monthly_data"]],
+                "temp_unit": historical_data.get("temp_unit", DEFAULT_TEMP_UNIT),
+                "precip_unit": historical_data.get("precip_unit", DEFAULT_PRECIP_UNIT),
+            }
+    except Exception as e:
+        print(f"Error fetching historical data for {city_name}: {e}")
+        # Don't set chart_data, leave it as None
+    
+    return weather_card_data, chart_data
 
-    city_processing_result["address"] = coordinates.get("address")
 
-    annual_weather_data = get_historical_annual_data_by_month(
-        coordinates["latitude"], coordinates["longitude"], year
-    )
-
-    if not annual_weather_data or not annual_weather_data.get("monthly_data"):
-        city_processing_result["error"] = (
-            f"Could not retrieve annual weather data for {city_name} for {year}."
-        )
-        return city_processing_result
-
-    city_processing_result["weather_data_raw"] = annual_weather_data["monthly_data"]
-    city_processing_result["temp_unit"] = annual_weather_data.get(
-        "temp_unit", DEFAULT_TEMP_UNIT
-    )
-    city_processing_result["precip_unit"] = annual_weather_data.get(
-        "precip_unit", DEFAULT_PRECIP_UNIT
-    )
-
-    return city_processing_result
-
-
-def _prepare_chart_data(city_result: CityProcessingResult) -> Optional[ChartDataItem]:
+def _process_cities_concurrently(city_names: List[str]) -> Tuple[List[WeatherCardData], List[ChartDataItem], List[str]]:
     """
-    Prepares chart data from city processing result.
-
+    Process multiple cities concurrently for better performance.
+    
     Args:
-        city_result: The result from _fetch_and_process_city_weather_data.
-
+        city_names: List of city names to process
+        
     Returns:
-        A dictionary with chart data or None if no weather data is available.
+        Tuple of (weather_cards_data, chart_data_list, processing_errors)
     """
-    if not city_result.get("weather_data_raw"):
-        return None
-
-    return {
-        "name": f"{city_result['name']} ({city_result['year']})",
-        "temperatures": [m["avg_temp"] for m in city_result["weather_data_raw"]],
-        "precipitations": [m["total_precip"] for m in city_result["weather_data_raw"]],
-        "temp_unit": city_result["temp_unit"],
-        "precip_unit": city_result["precip_unit"],
-    }
+    weather_cards_data = []
+    chart_data_list = []
+    processing_errors = []
+    
+    # Use ThreadPoolExecutor for concurrent processing
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+        # Submit all city processing tasks
+        future_to_city = {
+            executor.submit(_process_city_data, city_name): city_name 
+            for city_name in city_names
+        }
+        
+        # Collect results as they complete
+        for future in concurrent.futures.as_completed(future_to_city):
+            city_name = future_to_city[future]
+            try:
+                weather_card, chart_data = future.result()
+                
+                # Add weather card data (even if it has errors)
+                if weather_card:
+                    weather_cards_data.append(weather_card)
+                else:
+                    # Create error card if processing completely failed
+                    weather_cards_data.append({
+                        "name": city_name,
+                        "error": f"Could not process data for {city_name}"
+                    })
+                
+                # Add chart data if available
+                if chart_data:
+                    chart_data_list.append(chart_data)
+                else:
+                    processing_errors.append(f"No historical data available for {city_name}")
+                    
+            except Exception as e:
+                print(f"Unexpected error processing {city_name}: {e}")
+                processing_errors.append(f"Error processing {city_name}")
+                weather_cards_data.append({
+                    "name": city_name,
+                    "error": f"Unexpected error processing {city_name}"
+                })
+    
+    # Sort results to maintain original order
+    def get_city_order(item):
+        city_name = item.get("name", "").split(" (")[0]  # Remove year range suffix for chart data
+        try:
+            return city_names.index(city_name)
+        except ValueError:
+            return len(city_names)  # Put unmatched items at the end
+    
+    weather_cards_data.sort(key=get_city_order)
+    chart_data_list.sort(key=get_city_order)
+    
+    return weather_cards_data, chart_data_list, processing_errors
 
 
 def index_view(request):
@@ -196,40 +296,97 @@ def index_view(request):
         context["submitted_city3"] = request.POST.get("city_name_3", "").strip()
         
         # Parse form input
-        city_year_pairs, form_error = _parse_form_input(request.POST)
+        city_names, form_error = _parse_form_input(request.POST)
 
         if form_error:
             context["error_message"] = form_error
             return render(request, "comparer/index.html", context)
 
-        # Process cities
-        processed_cities = []
-        chart_data_list = []
+        # Process cities concurrently for better performance
+        weather_cards_data, chart_data_list, processing_errors = _process_cities_concurrently(city_names)
 
-        for city_name, year in city_year_pairs:
-            city_result = _fetch_and_process_city_weather_data(city_name, year)
-            processed_cities.append(city_result)
-
-            chart_data = _prepare_chart_data(city_result)
-            if chart_data:
-                chart_data_list.append(chart_data)
-
-        context["city_details_for_display"] = processed_cities
+        context["weather_cards_data"] = weather_cards_data
         context["city_data_for_chart"] = chart_data_list
 
-        if not chart_data_list and not form_error:
-            all_errors = [d["error"] for d in processed_cities if d["error"]]
-            if len(all_errors) == len(city_year_pairs):
-                context["error_message"] = (
-                    "Could not generate chart data. Weather data might be unavailable or city names incorrect."
-                )
+        # Set error message if no data could be processed
+        if not weather_cards_data and not chart_data_list:
+            context["error_message"] = "Could not process any city data. Please check city names and try again."
+        elif processing_errors and not chart_data_list:
+            context["error_message"] = "Could not generate charts. " + "; ".join(processing_errors)
 
     return render(request, "comparer/index.html", context)
 
 
+def city_compare_api(request):
+    """
+    API endpoint for async weather and chart data loading.
+    Accepts POST with city names, returns weather cards and chart data as JSON.
+    """
+    if request.method != "POST":
+        return JsonResponse({"error": "POST required"}, status=405)
+
+    try:
+        data = json.loads(request.body.decode("utf-8"))
+        city_names = data.get("cities", [])
+        if not isinstance(city_names, list) or not city_names:
+            return JsonResponse({"error": "No cities provided"}, status=400)
+        # Limit to 3 cities for safety and capitalize each city name
+        city_names = [city.strip().title() for city in city_names[:3] if city.strip()]
+        weather_cards_data, chart_data_list, processing_errors = _process_cities_concurrently(city_names)
+        return JsonResponse({
+            "weather_cards_data": weather_cards_data,
+            "city_data_for_chart": chart_data_list,
+            "errors": processing_errors,
+        })
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+def _filter_city_data(data, query=None, limit=50):
+    """
+    Filter city data based on query and limit.
+    
+    Args:
+        data: List of city dictionaries
+        query: Optional search query string
+        limit: Maximum number of results to return
+        
+    Returns:
+        List of filtered city dictionaries
+    """
+    filtered_data = []
+    
+    # Determine which cities to process
+    cities_to_process = data if query else data[:limit]
+    
+    for city in cities_to_process:
+        # Stop once we reach the limit
+        if len(filtered_data) >= limit:
+            break
+            
+        try:
+            # Skip if city doesn't match query
+            if query and query not in city['name'].lower():
+                continue
+                
+            # Check if the city name can be encoded in ASCII
+            city['name'].encode('ascii')
+            
+            # Add to filtered results
+            filtered_data.append({
+                'id': city['id'],
+                'name': city['name'],
+                'state': city.get('state', ''),
+                'country': city['country']
+            })
+        except (UnicodeEncodeError, KeyError):
+            # Skip cities with non-ASCII characters or missing data
+            continue
+            
+    return filtered_data
+
 def city_data_view(request):
     """
-    Serve city data for autocomplete functionality.
+    Serve city data for autocomplete functionality with optimized loading.
     
     Args:
         request: The HTTP request object.
@@ -245,29 +402,17 @@ def city_data_view(request):
         if not os.path.exists(city_list_path):
             return JsonResponse({'error': 'City data file not found'}, status=404)
         
-        # Read the file in chunks to handle large file size
+        # Get query parameter for filtering
+        query = request.GET.get('q', '').lower().strip()
+        limit = int(request.GET.get('limit', 50))  # Limit results for better performance
+        
+        # Read the file
         with open(city_list_path, 'r', encoding='utf-8') as file:
-            # Read only the first 5000 cities for performance
-            # In a production environment, you would implement proper pagination
-            # or use a database instead of reading from a file
-            data = json.loads(file.read())[:5000]
-            
-        # Filter out cities with non-ASCII characters that might cause display issues
-        filtered_data = []
-        for city in data:
-            try:
-                # Check if the city name can be encoded in ASCII
-                city['name'].encode('ascii')
-                filtered_data.append({
-                    'id': city['id'],
-                    'name': city['name'],
-                    'state': city.get('state', ''),
-                    'country': city['country']
-                })
-            except UnicodeEncodeError:
-                # Skip cities with non-ASCII characters
-                continue
-                
+            data = json.loads(file.read())
+        
+        # Filter the data
+        filtered_data = _filter_city_data(data, query, limit)
+                    
         return JsonResponse(filtered_data, safe=False)
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=500)

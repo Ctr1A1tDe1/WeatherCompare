@@ -42,6 +42,7 @@ source .venv/bin/activate
 
 ### Step 3: Install Dependencies
 
+Make sure you are in the root dir in cmd
 ```bash
 pip install -r requirements.txt
 ```

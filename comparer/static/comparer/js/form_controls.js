@@ -55,6 +55,9 @@ function initializeFormState() {
     if (dropdown) {
         dropdown.value = cityCount.toString();
     }
+
+    // Update the city count to reflect the initial state
+    updateCityCount();
 }
 
 /**
@@ -62,7 +65,8 @@ function initializeFormState() {
  */
 function updateCityCount() {
     const dropdown = document.getElementById('city-count-dropdown');
-    const selectedCount = parseInt(dropdown.value);
+    if (!dropdown) return;
+    const selectedCount = parseInt(dropdown.value, 10);
     
     // Show/hide cities based on selection
     for (let i = 2; i <= 3; i++) {
@@ -107,9 +111,36 @@ function showCity(cityNumber) {
     const cityInput = document.getElementById(`city_name_${cityNumber}`);
     
     if (cityElement) {
-        cityElement.style.display = 'flex';
+        cityElement.classList.remove('d-none');
         if (cityInput) {
             cityInput.required = true;
+            
+            // Special handling for city 3 - workaround for display issue
+            if (cityNumber === 3) {
+                // Create a completely new structure for city 3
+                const city3Container = document.createElement('div');
+                city3Container.className = 'col-md-4 mb-3';
+                city3Container.id = 'city-3-replacement';
+                city3Container.innerHTML = `
+                    <label for="city_input_3_new" class="form-label">City 3:</label>
+                    <input type="text" name="city_name_3" id="city_input_3_new" class="form-control" placeholder="e.g., Tokyo" required>
+                `;
+                
+                // Hide the original city-3 div
+                cityElement.style.display = 'none';
+                
+                // Insert the new container after city-2
+                const city2Element = document.getElementById('city-2');
+                if (city2Element && city2Element.parentNode) {
+                    city2Element.parentNode.insertBefore(city3Container, city2Element.nextSibling);
+                    
+                    // Get the new input and sync with original hidden input
+                    const newInput = city3Container.querySelector('input');
+                    newInput.addEventListener('input', function() {
+                        if (cityInput) cityInput.value = this.value;
+                    });
+                }
+            }
         }
     }
 }
@@ -123,10 +154,23 @@ function hideCity(cityNumber) {
     const cityInput = document.getElementById(`city_name_${cityNumber}`);
     
     if (cityElement) {
-        cityElement.style.display = 'none';
+        cityElement.classList.add('d-none');
         if (cityInput) {
             cityInput.value = '';
             cityInput.required = false;
+        }
+    }
+    
+    // Also hide the replacement container for city 3
+    if (cityNumber === 3) {
+        const replacementContainer = document.getElementById('city-3-replacement');
+        if (replacementContainer) {
+            replacementContainer.style.display = 'none';
+            const replacementInput = replacementContainer.querySelector('input');
+            if (replacementInput) {
+                replacementInput.value = '';
+                replacementInput.required = false;
+            }
         }
     }
 }

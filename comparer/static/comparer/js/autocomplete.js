@@ -8,6 +8,7 @@ class CityAutocomplete {
         this.cities = [];
         this.cache = new Map(); // Cache for search results
         this.debounceTimer = null;
+        this.initialized = false;
     }
 
     /**
@@ -43,7 +44,7 @@ class CityAutocomplete {
             
             const fullCityList = await response.json();
             if (Array.isArray(fullCityList) && fullCityList.length > 0) {
-                console.log(`Loaded ${fullCityList.length} cities for autocomplete`);
+                // Successfully loaded city data
                 
                 // Pre-process city names for faster searching
                 this.cities = fullCityList.map(city => {
@@ -114,14 +115,16 @@ class CityAutocomplete {
     setupAutocomplete() {
         // Function to initialize autocomplete
         const initAutocomplete = () => {
-            console.log('Setting up autocomplete for city inputs');
+            if (this.initialized) {
+                return;
+            }
+            this.initialized = true;
+
+            // Setting up autocomplete for city inputs
             // Find all city input fields
             const cityInputs = document.querySelectorAll('input[id^="city_name_"]');
-            console.log(`Found ${cityInputs.length} city input fields`);
-            
             // Set up autocomplete for each input
             cityInputs.forEach(input => {
-                console.log(`Setting up autocomplete for: ${input.id}`);
                 this.attachAutocomplete(input);
             });
         };
@@ -349,7 +352,7 @@ class CityAutocomplete {
     try {
         const cityAutocomplete = new CityAutocomplete();
         await cityAutocomplete.init();
-        console.log('CityAutocomplete initialized successfully');
+        // CityAutocomplete initialized successfully
     } catch (error) {
         console.error('Failed to initialize CityAutocomplete:', error);
     }

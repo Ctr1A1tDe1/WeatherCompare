@@ -1,80 +1,43 @@
-{% load static %} {# Load the staticfiles template tags #}
-<!DOCTYPE html>
-<html lang="en" data-theme="light">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Weather Compare</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
-    <link rel="stylesheet" href="{% static 'comparer/css/styles.css' %}">
-</head>
-<body>
-    <div class="header">
-        <div class="hamburger-menu">
-            <input id="menu-toggle" type="checkbox">
-            <label for="menu-toggle" class="menu-button">
-                <span class="hamburger-icon"></span>
-            </label>
-            <div class="menu-items">
-                <a href="{% url 'comparer:index' %}">Home</a>
-                <a href="#about">About</a>
-                <a href="#help">Help</a>
+{% extends "comparer/base.html" %}
+{% load static %}
+
+{% block title %}Weather Compare - Home{% endblock %}
+
+{% block content %}
+<div class="card p-4">
+    <form id="weather-form" method="POST" action="{% url 'comparer:index' %}">
+        {% csrf_token %}
+        <div class="row mb-4">
+            <div class="col-md-4">
+                <label for="city-count-dropdown" class="form-label">Number of cities:</label>
+                <select id="city-count-dropdown" class="form-select">
+                    <option value="1">1 city</option>
+                    <option value="2">2 cities</option>
+                    <option value="3">3 cities</option>
+                </select>
             </div>
         </div>
-        
-        <h1>Weather Compare</h1>
-        
-        <div class="theme-toggle">
-            <input type="checkbox" id="theme-switch">
-            <label for="theme-switch" class="toggle-label">
-                <i class="fas fa-sun"></i>
-                <i class="fas fa-moon"></i>
-            </label>
+        <div class="row">
+            <div class="col-md-4 mb-3" id="city-1">
+                <label for="city_name_1" class="form-label">City 1:</label>
+                <input type="text" name="city_name_1" id="city_name_1" class="form-control" value="{{ submitted_city1|default:'' }}" placeholder="e.g., London" required>
+            </div>
+            <div class="col-md-4 mb-3 d-none" id="city-2">
+                <label for="city_name_2" class="form-label">City 2:</label>
+                <input type="text" name="city_name_2" id="city_name_2" class="form-control" value="{{ submitted_city2|default:'' }}" placeholder="e.g., New York">
+            </div>
+            <div class="col-md-4 mb-3 d-none" id="city-3">
+                <label for="city_name_3" class="form-label">City 3:</label>
+                <input type="text" name="city_name_3" id="city_name_3" class="form-control" value="{{ submitted_city3|default:'' }}" placeholder="e.g., Tokyo">
+            </div>
         </div>
-    </div>
-    
-    <div class="container">
-
-        <div class="form-section">
-            <form id="weather-form" method="POST" action="{% url 'comparer:index' %}">
-                {% csrf_token %}
-                <div class="city-controls">
-                    <div class="city-count-selector">
-                        <label for="city-count-dropdown">Number of cities:</label>
-                        <select id="city-count-dropdown" onchange="updateCityCount()">
-                            <option value="1">1 city</option>
-                            <option value="2">2 cities</option>
-                            <option value="3">3 cities</option>
-                        </select>
-                    </div>
-                </div>
-                
-                <div class="cities-container">
-                    <!-- City 1 (always visible) -->
-                    <div class="city-input-group autocomplete-wrapper" id="city-1">
-                        <label for="city_name_1">City 1:</label>
-                        <input type="text" name="city_name_1" id="city_name_1" value="{{ submitted_city1|default:'' }}" placeholder="e.g., London" required>
-                    </div>
-                    
-                    <!-- City 2 (initially hidden) -->
-                    <div class="city-input-group autocomplete-wrapper" id="city-2" style="display: none;">
-                        <label for="city_name_2">City 2:</label>
-                        <input type="text" name="city_name_2" id="city_name_2" value="{{ submitted_city2|default:'' }}" placeholder="e.g., New York">
-                    </div>
-                    
-                    <!-- City 3 (initially hidden) -->
-                    <div class="city-input-group autocomplete-wrapper" id="city-3" style="display: none;">
-                        <label for="city_name_3">City 3:</label>
-                        <input type="text" name="city_name_3" id="city_name_3" value="{{ submitted_city3|default:'' }}" placeholder="e.g., Tokyo">
-                    </div>
-                </div>
-                
-                <div class="form-group submit-container">
-                    <button type="submit" id="submit-button">Compare Weather</button>
-                </div>
-            </form>
+        <div class="row">
+            <div class="col-12">
+                <button type="submit" id="submit-button" class="btn btn-primary w-100">Compare Weather</button>
+            </div>
         </div>
+    </form>
+</div>
 
         <!-- Processing Indicator -->
         <div class="processing-indicator" id="processing-indicator">
@@ -87,15 +50,9 @@
         {% if error_message %}
             <p class="error-message">{{ error_message }}</p>
         {% endif %}
-        
-        <footer>
-            <p>Geocoding by Nominatim (OpenStreetMap). Current and historical weather data by Open-Meteo.</p>
-            <p>Site design by Ctr1A1tDe1</p>
-        </footer>
-    </div>
+{% endblock %}
 
-    {# JavaScript Files #}
-    <script src="{% static 'comparer/js/theme_controls.js' %}"></script>
+{% block extra_js %}
     <script src="{% static 'comparer/js/form_controls.js' %}"></script>
     <script src="{% static 'comparer/js/autocomplete.js' %}"></script>
     <script src="{% static 'comparer/js/main_charts.js' %}"></script>
@@ -147,60 +104,52 @@
             
             let cardsHtml = '<h2>Current Weather</h2>';
             
-            // Determine card container class based on number of cards
-            let containerClass = 'one-card';
-            if (data.weather_cards_data.length === 2) {
-                containerClass = 'two-cards';
-            } else if (data.weather_cards_data.length === 3) {
-                containerClass = 'three-cards';
-            }
-            
-            cardsHtml += `<div class="weather-cards-container ${containerClass}">`;
+            cardsHtml += '<div class="row">';
             
             // Add each weather card
             for (const card of data.weather_cards_data) {
+                cardsHtml += '<div class="col-md-4 mb-4">';
                 if (card.error) {
                     cardsHtml += `
-                        <div class="weather-card">
-                            <div class="weather-card-error">
-                                <h4>${card.name}</h4>
-                                <p class="error-message">${card.error}</p>
+                        <div class="card">
+                            <div class="card-body">
+                                <h5 class="card-title">${card.name}</h5>
+                                <p class="card-text text-danger">${card.error}</p>
                             </div>
                         </div>
                     `;
                 } else {
                     cardsHtml += `
-                <div class="weather-card">
-                    <div class="weather-header">
-                        <h4 class="city-name">${card.name}</h4>
-                        <span class="day-date">${card.day_date}</span>
-                    </div>
-                    <div class="weather-main">
-                        <div class="temperature-section">
-                            <span class="temperature">${parseFloat(card.temperature).toFixed(1)}°</span>
-                            <span class="temp-unit">${card.temp_unit}</span>
-                        </div>
-                        <div class="weather-icon-section">
-                            <i class="weather-icon ${card.weather_icon}"></i>
-                        </div>
-                    </div>
-                    <div class="weather-details">
-                        <div class="weather-detail-item">
-                            <i class="fas fa-tint"></i>
-                            <span>${card.humidity}%</span>
-                        </div>
-                        <div class="weather-detail-item">
-                            <i class="fas fa-wind"></i>
-                            <span>${card.wind_display}</span>
-                        </div>
-                    </div>
-                    <div class="weather-description">
-                        <p>${card.weather_description}</p>
-                    </div>
-                    ${card.address ? `<div class="weather-location"><small><em>${card.address}</em></small></div>` : ''}
+                        <div class="card">
+                            <div class="card-body">
+                                <h5 class="card-title">${card.name}</h5>
+                                <h6 class="card-subtitle mb-2 text-muted">${card.day_date}</h6>
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <div>
+                                        <span class="display-4">${parseFloat(card.temperature).toFixed(1)}&deg;</span>
+                                        <span class="text-muted">${card.temp_unit}</span>
+                                    </div>
+                                    <div>
+                                        <i class="${card.weather_icon} fa-3x"></i>
+                                    </div>
+                                </div>
+                                <p class="card-text">${card.weather_description}</p>
+                                <ul class="list-group list-group-flush">
+                                    <li class="list-group-item d-flex justify-content-between">
+                                        <span><i class="fas fa-tint"></i> Humidity</span>
+                                        <strong>${card.humidity}%</strong>
+                                    </li>
+                                    <li class="list-group-item d-flex justify-content-between">
+                                        <span><i class="fas fa-wind"></i> Wind</span>
+                                        <strong>${card.wind_display}</strong>
+                                    </li>
+                                </ul>
+                                ${card.address ? `<div class="card-footer text-muted"><small>${card.address}</small></div>` : ''}
+                            </div>
                         </div>
                     `;
                 }
+                cardsHtml += '</div>';
             }
             
             cardsHtml += '</div>';
@@ -290,5 +239,4 @@
         });
     });
     </script>
-</body>
-</html>
+{% endblock %}

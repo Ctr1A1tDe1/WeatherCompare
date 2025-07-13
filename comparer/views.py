@@ -341,52 +341,11 @@ def city_compare_api(request):
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
 
-def _filter_city_data(data, query=None, limit=50):
-    """
-    Filter city data based on query and limit.
-    
-    Args:
-        data: List of city dictionaries
-        query: Optional search query string
-        limit: Maximum number of results to return
-        
-    Returns:
-        List of filtered city dictionaries
-    """
-    filtered_data = []
-    
-    # Determine which cities to process
-    cities_to_process = data if query else data[:limit]
-    
-    for city in cities_to_process:
-        # Stop once we reach the limit
-        if len(filtered_data) >= limit:
-            break
-            
-        try:
-            # Skip if city doesn't match query
-            if query and query not in city['name'].lower():
-                continue
-                
-            # Check if the city name can be encoded in ASCII
-            city['name'].encode('ascii')
-            
-            # Add to filtered results
-            filtered_data.append({
-                'id': city['id'],
-                'name': city['name'],
-                'state': city.get('state', ''),
-                'country': city['country']
-            })
-        except (UnicodeEncodeError, KeyError):
-            # Skip cities with non-ASCII characters or missing data
-            continue
-            
-    return filtered_data
+from .db_utils import search_cities, get_popular_cities
 
 def city_data_view(request):
     """
-    Serve city data for autocomplete functionality with optimized loading.
+    Serve city data for autocomplete functionality using database search.
     
     Args:
         request: The HTTP request object.
@@ -395,24 +354,17 @@ def city_data_view(request):
         JsonResponse with city data.
     """
     try:
-        # Path to the city list JSON file
-        city_list_path = os.path.join(settings.BASE_DIR, 'city.list.json')
-        
-        # Check if file exists
-        if not os.path.exists(city_list_path):
-            return JsonResponse({'error': 'City data file not found'}, status=404)
-        
         # Get query parameter for filtering
-        query = request.GET.get('q', '').lower().strip()
-        limit = int(request.GET.get('limit', 50))  # Limit results for better performance
+        query = request.GET.get('q', '').strip()
+        limit = int(request.GET.get('limit', 10))  # Default to 10 results
         
-        # Read the file
-        with open(city_list_path, 'r', encoding='utf-8') as file:
-            data = json.loads(file.read())
-        
-        # Filter the data
-        filtered_data = _filter_city_data(data, query, limit)
+        # Get cities based on query
+        if query:
+            cities = search_cities(query, limit)
+        else:
+            # Return popular cities if no query
+            cities = get_popular_cities(limit)
                     
-        return JsonResponse(filtered_data, safe=False)
+        return JsonResponse(cities, safe=False)
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=500)

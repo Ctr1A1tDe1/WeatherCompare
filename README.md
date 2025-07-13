@@ -1,106 +1,87 @@
-# WeatherCompare Django App (v0.1.0)
+# WeatherCompare (Proof of Concept)
 
-Welcome to my repo. I am an aspiring developer, I orginally made this for my partner for helping her decide on where in the world to visit and when.
-Some places are too hot and some are too cold. There is probally something better out there but I wanted to learn about programming and develop as I am teaching myself. Any help or advice is appreciated.
-
-This Project:
-
-Quickly compare historical annual weather (average monthly temperature & precipitation) for two cities using interactive charts.
+WeatherCompare is a Django-based web application that allows users to compare weather data between different cities. This is a proof of concept and is not intended for production use.
 
 ## Core Features
 
-*   Side-by-side annual weather comparison for two cities.
-*   Year selection for historical data.
-*   City name input (automatic geocoding).
-*   Interactive line (temperature) and bar (precipitation) charts.
+- Compare weather data between cities
+- Autocomplete search for city names
+- Responsive web interface
 
 ## Tech Stack
 
-*   **Backend:** Python, Django
-*   **Frontend:** HTML, CSS, JavaScript (with Chart.js)
-*   **APIs:** 
-    *   Nominatim (OpenStreetMap) for Geocoding
-    *   Open-Meteo for Historical Weather Data
+- Backend: Django 5.2.1
+- Database: SQLite (for development)
+- Frontend: HTML, CSS, JavaScript
 
----
 
-## Quick Start
+## Setup and Installation
 
 ### Prerequisites
 
-*   Python 3.9+ & Pip
-*   Git
-*   Virtual Environment (e.g., `venv`)
+- Python 3.8+
+- pip
+- git
 
-### Setup Instructions
+### Step 1: Clone the Repository
 
-1.  **Clone:**
-    ```bash
-    git clone <https://github.com/Ctr1A1tDe1/WeatherCompare>
-    cd WeatherAppProject
-    ```
+```bash
+git clone https://github.com/Ctr1A1tDe1/WeatherCompare.git
+cd WeatherCompare
+```
 
-2.  **Virtual Environment:**
-    ```bash
-    python -m venv venv
-    # Windows:
-    venv\Scripts\activate
-    # macOS/Linux:
-    source venv/bin/activate
-    ```
+### Step 2: Create and Activate a Virtual Environment
 
-3.  **Install Dependencies:**
-    ```bash
-    pip install -r requirements.txt
-    ```
+```bash
+python -m venv .venv
+# On Windows
+.venv\Scripts\activate
+# On macOS/Linux
+source .venv/bin/activate
+```
 
-4.  **Environment Variables:**
-    *   Copy `.env.example` to `.env`:
-        ```bash
-        # Windows: copy .env.example .env
-        # macOS/Linux: cp .env.example .env
-        ```
-    *   **Edit `.env`** and update `NOMINATIM_USER_AGENT_APP_NAME` and `NOMINATIM_USER_AGENT_EMAIL` with your application name and a valid contact email (required by Nominatim's policy).
+### Step 3: Install Dependencies
 
-5.  **Database Migrations:**
-    ```bash
-    python manage.py migrate
-    ```
+```bash
+pip install -r requirements.txt
+```
 
-6.  **Run Server:**
-    ```bash
-    python manage.py runserver
-    ```
-    Access at `http://127.0.0.1:8000/`
+### Step 4: Generate a New SECRET_KEY
 
-7.  **Run Tests (Optional):**
-    ```bash
-    python manage.py test comparer 
-    ```
+```bash
+python manage.py generatesecretkey
+```
 
----
+This will output a new secret key. Copy it and create a `.env` file in the project root with the following content:
 
-## Usage
+```
+SECRET_KEY=your_generated_secret_key_here
+```
 
-1.  Open the app in your browser.
-2.  Enter two city names and a year.
-3.  Click "Compare Weather" to view the charts and data.
+### Step 5: Create the City Autocomplete Database
 
----
+```bash
+python dbscript/create_autocomplete_db.py
+```
 
-## Data Sources & Attribution
+### Step 6: Run Django Migrations
 
-**Geocoding:** [Nominatim](https://nominatim.openstreetmap.org/) (© OpenStreetMap contributors, ODbL). 
-    Adhere to [Nominatim Usage Policy](https://operations.osmfoundation.org/policies/nominatim/).
+```bash
+python manage.py migrate
+```
 
-**Weather Data:** [Open-Meteo API](https://open-meteo.com/en/docs/historical-weather-api) (Non-commercial use, CC BY-NC 4.0).
+### Step 7: Run the Development Server
 
-**Charting:** [Chart.js](https://www.chartjs.org/) (MIT Licensed).
+```bash
+python manage.py runserver
+```
 
----
+The application will be available at `http://127.0.0.1:8000/`.
+
+## Contributing
+
+Please read `CONTRIBUTING.md` for details on our code of conduct and the process for submitting pull requests.
 
 ## License
 
-This project is licensed under the MIT License.
----
-*v0.1.0: Test Build.*
+This project is licensed under the MIT License - see the `LICENCE.md` file for details.

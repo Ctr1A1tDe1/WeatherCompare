@@ -2,13 +2,12 @@
 import requests
 import pandas as pd
 from datetime import datetime, timedelta
-from geopy.geocoders import Nominatim
-from geopy.exc import GeocoderTimedOut, GeocoderUnavailable
 import os
 import time
 from functools import wraps
 from typing import Dict, List, Optional, Union, Any, Tuple
 from django.core.cache import cache
+from .db_utils import get_coordinates_from_db
 
 # --- Constants for API interaction ---
 OPEN_METEO_ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
@@ -121,8 +120,8 @@ def _create_user_agent() -> str:
 # --- Geocoding Function ---
 def get_coordinates_for_city(city_name: str) -> Optional[CoordinatesDict]:
     """
-    Geocodes a city name to its latitude and longitude using Nominatim.
-
+    Geocodes a city name to its latitude and longitude using the cities database.
+    
     Args:
         city_name: The name of the city.
 
@@ -130,53 +129,7 @@ def get_coordinates_for_city(city_name: str) -> Optional[CoordinatesDict]:
         A dictionary with 'latitude', 'longitude', and 'address',
         or None if not found or an error occurs.
     """
-    if not city_name:
-        print("Warning: Empty city name provided for geocoding.")
-        return None
-
-    # Create a cache key - replace spaces with underscores to avoid memcached issues
-    cache_key = f"geocode_{city_name.lower().strip().replace(' ', '_')}"
-
-    # Try to get from cache
-    cached_coords = cache.get(cache_key)
-    if cached_coords:
-        return cached_coords
-
-    # Get user agent string
-    user_agent_string = _create_user_agent()
-
-    try:
-        # Apply rate limiting
-        NOMINATIM_RATE_LIMITER.wait_if_needed()
-
-        geolocator = Nominatim(user_agent=user_agent_string)
-
-        location = geolocator.geocode(city_name, timeout=10)
-        if location:
-            result = {
-                "latitude": location.latitude,
-                "longitude": location.longitude,
-                "address": location.address,
-            }
-            # Cache for a longer period as coordinates rarely change
-            cache.set(cache_key, result, GEOCODING_CACHE_DURATION)
-            return result
-        else:
-            print(
-                f"Info: Could not geocode city: '{city_name}'. No location found by Nominatim."
-            )
-            return None
-    except GeocoderTimedOut:
-        print(f"Warning: Geocoding service timed out for city: '{city_name}'")
-        return None
-    except GeocoderUnavailable:
-        print(f"Warning: Geocoding service unavailable for city: '{city_name}'")
-        return None
-    except Exception as e:
-        print(
-            f"Error: An unexpected error occurred during geocoding for '{city_name}': {e}"
-        )
-        return None
+    return get_coordinates_from_db(city_name)
 
 
 # --- Weather Data Fetching and Processing Helpers ---
